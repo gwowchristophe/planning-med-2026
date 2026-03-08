@@ -39,16 +39,20 @@ def ok(n, d, p, pl, vo):
     if p == "JK" and not MDS[n]["j"]: return False
     return True
 
-def get_s(n, stt):
-    return stt[n] / MDS[n]["e"]
+def get_s(n, stt): return stt[n] / MDS[n]["e"]
 
-# Interface
+def color_we(row):
+    d = row.name
+    if d.weekday() >= 5 or d in BH:
+        return ['background-color: #f0f2f6'] * len(row)
+    return [''] * len(row)
+
 if 'u' not in st.session_state:
     st.title("🏥 Login")
-    if not os.path.exists(DB):
-        df_i = pd.DataFrame({"Medecin": list(MDS.keys()), "MDP": ["Doudoudragon"]*13})
-        sd(df_i, DB)
     u_df = gd(DB)
+    if u_df.empty:
+        df_i = pd.DataFrame({"Medecin": list(MDS.keys()), "MDP": ["Doudoudragon"]*13})
+        sd(df_i, DB); st.rerun()
     u_s = st.selectbox("Nom", list(MDS.keys()))
     pw = st.text_input("Code", type="password")
     if st.button("OK"):
@@ -57,12 +61,11 @@ if 'u' not in st.session_state:
             st.session_state.u = u_s
             st.rerun()
 else:
-    mn = ["📅 OFF", "🔐 Code", "Sortie"]
-    if st.session_state.u == "Christophe Angelo": mn.insert(1, "🚀 Go")
+    mn = ["📅 OFF", "🚀 Go", "🔐 Code", "Sortie"]
+    if st.session_state.u != "Christophe Angelo": mn.remove("🚀 Go")
     sel = st.sidebar.radio("Menu", mn)
 
     if sel == "📅 OFF":
-        st.subheader("Indispos")
         mo = st.selectbox("Mois", [4,5,6,7,8])
         df = gd(OF)
         c_o = set(df[df["Medecin"]==st.session_state.u]["Date_OFF"].tolist())
@@ -91,8 +94,7 @@ else:
             res_ok = True
             for d in ads:
                 jp = {}
-                ml = list(MDS.keys())
-                ml.sort(key=lambda x: get_s(x, stt))
+                ml = sorted(list(MDS.keys()), key=lambda x: get_s(x, stt))
                 f, s, di = (d in BH), (d.weekday()==5), (d.weekday()==6)
                 for p in ["GW", "GM", "JK", "JM"]:
                     if (f or s or di) and p in ["JK", "JM"]: continue
@@ -110,17 +112,17 @@ else:
             
             if not res_ok: st.error("Trop de OFF")
             else:
-                st.dataframe(pd.DataFrame.from_dict(pl, orient='index'))
+                df_p = pd.DataFrame.from_dict(pl, orient='index')
+                st.dataframe(df_p.style.apply(color_we, axis=1), height=400)
                 res = []
                 for m in MDS.keys():
-                    res.append({"Nom": m, "H": stt[m], "S": sq[m]["S"], "D": sq[m]["D"]})
+                    res.append({"Nom": m, "H": stt[m], "Sa": sq[m]["S"], "Di": sq[m]["D"], "Fé": sq[m]["F"]})
                 st.table(pd.DataFrame(res))
 
     elif sel == "🔐 Code":
         np = st.text_input("New", type="password")
         if st.button("Save"):
-            u_df = gd(DB)
-            u_df.loc[u_df["Medecin"]==st.session_state.u, "MDP"] = np
+            u_df = gd(DB); u_df.loc[u_df["Medecin"]==st.session_state.u, "MDP"] = np
             sd(u_df, DB); st.success("OK")
 
     elif sel == "Sortie":
