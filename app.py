@@ -139,17 +139,51 @@ else:
                             date_c = datetime(2026, mois, j)
                             d_str = date_c.strftime("%Y-%m-%d")
                             is_we = date_c.weekday() >= 5
+                            
+                            # --- 1. AJOUT DU POSTE KENNEDY (Lundi au Vendredi) ---
+                            # Si c'est un lundi, on bloque une personne pour 5 jours
+
+                            if date_c.weekday() == 0:  # Si c'est Lundi
+                        candidats_jk = [m for m in meds if m['Medecin'] not in ['Daryush', 'Christian', 'Elisa', 'Raouf']]
+                        
+                        # Filtrage par dispo (on vérifie Lun, Mar, Mer, Ven)
+                        dispos_jk = []
+                        jours_jk = [0, 1, 2, 4] # Index des jours : Lun=0, Mar=1, Mer=2, Ven=4
+                        # --- LOGIQUE KENNEDY (Lun, Mar, Mer, Ven - PAS DE JEUDI) ---
+                        for m in candidats_jk:
+                            # On vérifie que le médecin n'est pas "OFF" sur ces 4 jours précis
+                            semaine_ok = all(f"{m['Medecin']}_{ (date_c + timedelta(days=d)).strftime('%Y-%m-%d') }" not in absences for d in jours_jk)
+                            if semaine_ok: dispos_jk.append(m)
+
+                            # --- 2. CALCUL DE LA GARDE QUOTIDIENNE (GM ou GW) ---
                             poste, h_p = ("GW", 24) if is_we else ("GM", 24)
                             
+                            # On vérifie si quelqu'un est déjà pris par Kennedy ce jour-là
+                            deja_pris_jk = [p[2] for p in planning_final if p[0] == d_str and p[1] == "JK (Kennedy)"]
+                            
+                            # --- 2. FILTRAGE POUR LA GARDE (24h) ---
                             candidats = []
                             for m in meds:
                                 nom = m['Medecin']
+                                
+                                # Règle A : Pas de cumul avec Kennedy le même jour
+                                deja_en_jk = any(p[0] == d_str and p[2] == nom and "JK" in p[1] for p in planning_final)
+                                if deja_en_jk: continue
+                                
+                                # Règle B : Pas OFF ce jour-là
                                 if f"{nom}_{d_str}" in absences: continue
+                                
+                                # Règle C : Repos J+1 (Pas de garde si a travaillé hier)
                                 h_hier = (date_c - timedelta(days=1)).strftime("%Y-%m-%d")
                                 if any(p[0] == h_hier and p[2] == nom for p in planning_final): continue
+                                
+                                # Règle D : Daryush (Pas de WE)
                                 if m.get('Is_Daryush') == 'OUI' and is_we: continue
+                                
+                                # Règle E : Max 2 postes sur 8 jours glissants
                                 h_8d = (date_c - timedelta(days=8)).strftime("%Y-%m-%d")
                                 if len([p for p in planning_final if p[2] == nom and p[0] > h_8d]) >= 2: continue
+                                
                                 candidats.append(m)
 
                             if candidats:
