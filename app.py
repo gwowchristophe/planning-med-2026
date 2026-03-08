@@ -27,7 +27,7 @@ MDS = {
     "Simon Van Migem": {"e": 0.8, "j": 1, "t": 0}
 }
 
-# --- FONCTIONS LOGIQUES ---
+# --- FONCTIONS ---
 def gd(f): return pd.read_csv(f) if os.path.exists(f) else pd.DataFrame()
 def sd(df, f): df.to_csv(f, index=False)
 def get_s(n, stt): return stt[n] / MDS[n]["e"]
@@ -71,8 +71,11 @@ def create_ics(name, df_p):
     for d, row in df_p.iterrows():
         for p, m in row.items():
             if m == name:
-                ics.append(f"BEGIN:VEVENT\nDTSTART;VALUE=DATE:{d.strftime('%Y%m%d')}")
-                ics.append(f"SUMMARY:Garde {p}\nEND:VEVENT")
+                dt = d.strftime("%Y%m%d")
+                ics.append("BEGIN:VEVENT")
+                ics.append("DTSTART;VALUE=DATE:" + dt)
+                ics.append("SUMMARY:Garde " + str(p))
+                ics.append("END:VEVENT")
     ics.append("END:VCALENDAR")
     return "\n".join(ics)
 
@@ -81,7 +84,7 @@ if 'u' not in st.session_state:
     st.title("🏥 Connexion")
     u_df = gd(DB)
     if u_df.empty:
-        sd(pd.DataFrame({"Medecin":list(MDS.keys()), "MDP":["Doudoudragon"]*13}), DB)
+        sd(pd.DataFrame({"Medecin":list(MDS.keys()),"MDP":["Doudoudragon"]*13}), DB)
     u_s = st.selectbox("Nom", list(MDS.keys()))
     pw = st.text_input("Code", type="password")
     if st.button("OK"):
@@ -97,7 +100,7 @@ else:
         if os.path.exists("last.csv"):
             df_full = pd.read_csv("last.csv", index_col=0)
             df_full.index = pd.to_datetime(df_full.index)
-            st.download_button("Télécharger mon .ics", create_ics(st.session_state.u, df_full), f"{st.session_state.u}.ics")
+            st.download_button("Télécharger mon .ics", create_ics(st.session_state.u, df_full), st.session_state.u + ".ics")
         
         mo = st.selectbox("Mois", [4,5,6,7,8], format_func=lambda x: calendar.month_name[x])
         df_o = gd(OF)
@@ -108,4 +111,16 @@ else:
             cols = st.columns(7)
             for i, j in enumerate(s):
                 if j != 0:
-                    ds = f"2026-{
+                    # Remplacement f-string par concaténation simple
+                    ds = "2026-" + str(mo).zfill(2) + "-" + str(j).zfill(2)
+                    sign = " ✅"
+                    if ds in c_o: sign = " ❌"
+                    t = str(j) + sign
+                    if cols[i].button(t, key=ds, use_container_width=True):
+                        if ds in c_o: df_o = df_o[~((df_o["Medecin"]==st.session_state.u)&(df_o["Date_OFF"]==ds))]
+                        else: df_o = pd.concat([df_o, pd.DataFrame([{"Medecin":st.session_state.u,"Date_OFF":ds}])])
+                        sd(df_o, OF); st.rerun()
+
+    elif sel == "🚀 Go":
+        if st.button("Générer"):
+            vo = gd(OF).groupby("Medecin")["Date_OFF"].apply(list).to_dict()
