@@ -211,29 +211,47 @@ else:
                                 jours_theo = [0, 1, 2, 4] # Lun, Mar, Mer, Ven
                                 dates_reelles_jk = [(date_c + timedelta(days=d)).strftime("%Y-%m-%d") for d in jours_theo if (date_c + timedelta(days=d)).strftime("%Y-%m-%d") not in feries]
                                 
-                                # Vérification du contenu de la colonne Regles (on nettoie les espaces)
+                                # 1. On récupère les autorisés JK (nettoyage des espaces pour éviter les bugs)
                                 c_jk = [m for m in meds if str(regles.get(m['Medecin'], {}).get('Autorise_Kennedy', '')).strip().upper() == 'OUI']
                                 
-                                # Diagnostic si la liste est vide
-                                if not c_jk:
-                                    st.warning(f"Semaine du {d_str} : Aucun médecin n'a 'OUI' dans la colonne Autorise_Kennedy")
-                                
-                                # Un candidat est dispo s'il n'a pas d'OFF sur les jours RÉELS de travail
-                                dispos = [m for m in c_jk if all(f"{m['Medecin']}_{d}" not in absences for d in dates_reelles_jk)]
+                                # 2. On vérifie les absences (OFF)
+                                # On rajoute la condition check_fatigue pour s'assurer qu'il n'a pas fait de garde la veille (dimanche)
+                                dispos = [
+                                    m for m in c_jk if 
+                                    all(f"{m['Medecin']}_{d}" not in absences for d in dates_reelles_jk) and
+                                    check_fatigue(m['Medecin'], date_c)
+                                ]
                                 
                                 if dispos:
-                                    # On prend le plus équitable (on réduit la contrainte jk_hist pour le test)
-                                    elu = select_best_candidate(dispos)
-                                    for d_jk in dates_reelles_jk:
-                                        # IMPORTANT : On utilise "JK" comme nom de poste court
-                                        planning_final.append([d_jk, "JK", elu['Medecin'], 8])
-                                        heures_reelles[elu['Medecin']] += 8
-                                    jk_hist.append(elu['Medecin'])
+                                    # 3. FILTRE STRICT : Au moins 6 semaines (42 jours) d'écart
+                                    # On regarde dans le planning déjà généré si le médecin a fait JK récemment
+                                    date_limite = date_c - timedelta(weeks=6)
+                                    
+                                    dispos_frais = []
+                                    for m in dispos:
+                                        deja_fait_recemment = any(
+                                            p[1] == "JK" and 
+                                            p[2] == m['Medecin'] and 
+                                            datetime.strptime(p[0], "%Y-%m-%d") > date_limite 
+                                            for p in planning_final
+                                        )
+                                        if not deja_fait_recemment:
+                                            dispos_frais.append(m)
+
+                                    # 4. Sélection
+                                    if dispos_frais:
+                                        elu = select_best_candidate(dispos_frais)
+                                        for d_jk in dates_reelles_jk:
+                                            planning_final.append([d_jk, "JK", elu['Medecin'], 8])
+                                            heures_reelles[elu['Medecin']] += 8
+                                    else:
+                                        # Si personne n'a respecté les 6 semaines de repos, on met une alerte
+                                        for d_jk in dates_reelles_jk:
+                                            planning_final.append([d_jk, "JK", "⚠️ REPOS 6 SEM. IMPOSSIBLE", 0])
                                 else:
-                                    if c_jk: # S'il y avait des candidats mais tous occupés
-                                        st.error(f"Semaine du {d_str} : Les médecins JK ont des OFF qui bloquent la semaine.")
+                                    # Si personne n'est dispo (OFF)
                                     for d_jk in dates_reelles_jk:
-                                        planning_final.append([d_jk, "JK", "⚠️ VIDE", 0])
+                                        planning_final.append([d_jk, "JK", "⚠️ VIDE (OFF)", 0])
 
                             # --- B. DARYUSH VALADI (JM FIXE) ---
                             nom_dv = "Daryush Valadi"
