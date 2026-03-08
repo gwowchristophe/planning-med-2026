@@ -127,13 +127,22 @@ else:
                 
                 res = []
                 for m in MDS.keys():
+                    etp = MDS[m]["e"]
+                    # Calcul : (Heures de garde / 22 semaines) + (7.68h vacances temps plein * ETP)
+                    moy_garde = stt[m] / 22
+                    bonus_vac = 7.68 * etp
+                    moy_totale = round(moy_garde + bonus_vac, 2)
+                    
                     penible = sq[m]["S"] + sq[m]["D"] + sq[m]["F"]
                     res.append({
-                        "Médecin": m, "Heures": stt[m], "Moy/Sem": round(stt[m]/22, 1),
-                        "Total Gardes": sq[m]["TotG"], "Gardes WE/Fé": penible,
+                        "Médecin": m, 
+                        "Heures": stt[m], 
+                        "Moy Totale/Sem": moy_totale,
+                        "Total Gardes": sq[m]["TotG"], 
+                        "Gardes WE/Fé": penible,
                         "Sa": sq[m]["S"], "Di": sq[m]["D"], "Fé": sq[m]["F"]
                     })
-                st.subheader("Bilan d'équité détaillé")
+                st.subheader("Bilan d'équité détaillé (Incluant congés proratisés)")
                 st.table(pd.DataFrame(res))
 
     elif sel == "🔐 Mon Code":
@@ -143,5 +152,5 @@ else:
             sd(u_df, DB); st.success("Code mis à jour")
 
     elif sel == "Sortie":
-        del st.session_state.u
+        if 'u' in st.session_state: del st.session_state.u
         st.rerun()
