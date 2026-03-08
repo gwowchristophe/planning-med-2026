@@ -136,62 +136,61 @@ else:
                     for mois in range(4, 9):
                         jours = calendar.monthrange(2026, mois)[1]
                         for j in range(1, jours + 1):
+                            # --- TOUT CE QUI SUIT EST LE NOUVEAU BLOC KENNEDY + GARDE ---
                             date_c = datetime(2026, mois, j)
                             d_str = date_c.strftime("%Y-%m-%d")
                             is_we = date_c.weekday() >= 5
                             
-                            # --- 1. AJOUT DU POSTE KENNEDY (Lundi au Vendredi) ---
-                            # Si c'est un lundi, on bloque une personne pour 5 jours
+                            # --- A. POSTE KENNEDY (Lundi, Mardi, Mercredi, Vendredi) ---
+                            if date_c.weekday() == 0:  # Si on est Lundi
+                                # On exclut Daryush, Christian, Elisa, Raouf du Kennedy
+                                candidats_jk = [m for m in meds if m['Medecin'] not in ['Daryush', 'Christian', 'Elisa', 'Raouf']]
+                                j_indices = [0, 1, 2, 4] # Index 3 (Jeudi) volontairement oublié
+                                
+                                # Vérification des absences sur les 4 jours
+                                dispos_jk = []
+                                for m in candidats_jk:
+                                    sem_ok = all(f"{m['Medecin']}_{(date_c + timedelta(days=d)).strftime('%Y-%m-%d')}" not in absences for d in j_indices)
+                                    if sem_ok: dispos_jk.append(m)
+                                
+                                if dispos_jk:
+                                    elu_jk = min(dispos_jk, key=lambda x: dettes[x['Medecin']])
+                                    for d in j_indices:
+                                        d_jk = (date_c + timedelta(days=d)).strftime("%Y-%m-%d")
+                                        planning_final.append([d_jk, "JK (Kennedy)", elu_jk['Medecin'], 8])
+                                        dettes[elu_jk['Medecin']] += (8 / elu_jk['ETP'])
 
-                            if date_c.weekday() == 0:  # Si c'est Lundi
-                            candidats_jk = [m for m in meds if m['Medecin'] not in ['Daryush', 'Christian', 'Elisa', 'Raouf']]
-                        
-                            # Filtrage par dispo (on vérifie Lun, Mar, Mer, Ven)
-                            dispos_jk = []
-                            jours_jk = [0, 1, 2, 4] # Index des jours : Lun=0, Mar=1, Mer=2, Ven=4
-                            # --- LOGIQUE KENNEDY (Lun, Mar, Mer, Ven - PAS DE JEUDI) ---
-                            for m in candidats_jk:
-                            # On vérifie que le médecin n'est pas "OFF" sur ces 4 jours précis
-                            semaine_ok = all(f"{m['Medecin']}_{ (date_c + timedelta(days=d)).strftime('%Y-%m-%d') }" not in absences for d in jours_jk)
-                            if semaine_ok: dispos_jk.append(m)
-
-                            # --- 2. CALCUL DE LA GARDE QUOTIDIENNE (GM ou GW) ---
+                            # --- B. POSTE GARDE (GM ou GW) ---
                             poste, h_p = ("GW", 24) if is_we else ("GM", 24)
                             
-                            # On vérifie si quelqu'un est déjà pris par Kennedy ce jour-là
-                            deja_pris_jk = [p[2] for p in planning_final if p[0] == d_str and p[1] == "JK (Kennedy)"]
-                            
-                            # --- 2. FILTRAGE POUR LA GARDE (24h) ---
-                            candidats = []
+                            candidats_garde = []
                             for m in meds:
                                 nom = m['Medecin']
-                                
-                                # Règle A : Pas de cumul avec Kennedy le même jour
-                                deja_en_jk = any(p[0] == d_str and p[2] == nom and "JK" in p[1] for p in planning_final)
-                                if deja_en_jk: continue
-                                
-                                # Règle B : Pas OFF ce jour-là
+                                # 1. Pas déjà pris par le Kennedy aujourd'hui ?
+                                en_jk = any(p[0] == d_str and p[2] == nom and "JK" in p[1] for p in planning_final)
+                                if en_jk: continue
+                                # 2. Pas "OFF" ?
                                 if f"{nom}_{d_str}" in absences: continue
-                                
-                                # Règle C : Repos J+1 (Pas de garde si a travaillé hier)
+                                # 3. Pas de garde la veille (Repos J+1) ?
                                 h_hier = (date_c - timedelta(days=1)).strftime("%Y-%m-%d")
-                                if any(p[0] == h_hier and p[2] == nom for p in planning_final): continue
-                                
-                                # Règle D : Daryush (Pas de WE)
+                                deja_hier = any(p[0] == h_hier and p[2] == nom and "G" in p[1] for p in planning_final)
+                                if deja_hier: continue
+                                # 4. Daryush (Pas de WE) ?
                                 if m.get('Is_Daryush') == 'OUI' and is_we: continue
-                                
-                                # Règle E : Max 2 postes sur 8 jours glissants
+                                # 5. Max 2 gardes sur 8 jours ?
                                 h_8d = (date_c - timedelta(days=8)).strftime("%Y-%m-%d")
-                                if len([p for p in planning_final if p[2] == nom and p[0] > h_8d]) >= 2: continue
+                                nb_8j = len([p for p in planning_final if p[2] == nom and "G" in p[1] and p[0] > h_8d])
+                                if nb_8j >= 2: continue
                                 
-                                candidats.append(m)
+                                candidats_garde.append(m)
 
-                            if candidats:
-                                elu = min(candidats, key=lambda x: dettes[x['Medecin']])
-                                dettes[elu['Medecin']] += (h_p / elu['ETP'])
-                                planning_final.append([d_str, poste, elu['Medecin'], h_p])
+                            if candidats_garde:
+                                élu = min(candidats_garde, key=lambda x: dettes[x['Medecin']])
+                                dettes[élu['Medecin']] += (h_p / élu['ETP'])
+                                planning_final.append([d_str, poste, élu['Medecin'], h_p])
                             else:
                                 planning_final.append([d_str, poste, "⚠️ VIDE", 0])
+                            # --- FIN DU BLOC À REMPLACER ---
 
                     df_res = pd.DataFrame(planning_final, columns=["Date", "Poste", "Medecin", "Heures"])
                     st.success("Calcul terminé !")
