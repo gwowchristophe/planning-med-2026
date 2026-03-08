@@ -16,7 +16,8 @@ LISTE_MEDECINS = [
 ]
 
 # Initialisation des fichiers
-pd.DataFrame({"Medecin": LISTE_MEDECINS, "MDP": ["Doudoudragon"] * len(LISTE_MEDECINS)}).to_csv(DB_FILE, index=False)
+if not os.path.exists(DB_FILE):
+    pd.DataFrame({"Medecin": LISTE_MEDECINS, "MDP": ["Doudoudragon"] * len(LISTE_MEDECINS)}).to_csv(DB_FILE, index=False)
 
 if not os.path.exists(OFF_FILE):
     pd.DataFrame(columns=["Medecin", "Date_OFF"]).to_csv(OFF_FILE, index=False)
