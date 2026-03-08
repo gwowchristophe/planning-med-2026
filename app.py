@@ -132,10 +132,6 @@ else:
             df_u = read_sheet("Users")
             df_p = read_sheet("Planning")
             
-            # Sécurité : Si la colonne 'Heures' manque, on la crée à 0 pour éviter le plantage
-            if df_p.empty or 'Heures' not in df_p.columns:
-                df_p = pd.DataFrame(columns=["Date", "Poste", "Medecin", "Heures"])
-            
             if not df_u.empty:
                 bilan = []
                 for _, r in df_u.iterrows():
@@ -143,14 +139,14 @@ else:
                     try: etp = float(str(r['ETP']).replace(',','.')) if r['ETP'] else 1.0
                     except: etp = 1.0
                     
-                    m_p = df_p[df_p['Medecin'] == nom]
-                    hrs = pd.to_numeric(m_p['Heures'], errors='coerce').sum()
+                    m_p = df_p[df_p['Medecin'] == nom] if not df_p.empty else pd.DataFrame()
+                    hrs = pd.to_numeric(m_p['Heures'], errors='coerce').sum() if not m_p.empty else 0
                     
                     bilan.append({
                         "Médecin": nom, "ETP": etp, "Heures": hrs,
                         "Dette (H/ETP)": round(hrs/etp, 1) if etp > 0 else 0,
-                        "Nuits": len(m_p[m_p['Poste'].str.contains("G", na=False)]),
-                        "WE": len(m_p[m_p['Poste'].str.contains("GW", na=False)])
+                        "Nuits": len(m_p[m_p['Poste'].str.contains("G", na=False)]) if not m_p.empty else 0,
+                        "WE": len(m_p[m_p['Poste'].str.contains("GW", na=False)]) if not m_p.empty else 0
                     })
                 st.table(pd.DataFrame(bilan).sort_values("Dette (H/ETP)"))
 
@@ -158,7 +154,7 @@ else:
             st.subheader("Génération Dynamique via Google Sheets")
             if st.button("🚀 Lancer la génération (Lecture des règles...)"):
                 with st.spinner("Synchronisation des règles et calcul..."):
-                    # --- 1. CHARGEMENT ---
+                    # --- 1. CHARGEMENT DES DONNÉES ---
                     df_u = read_sheet("Users")
                     df_d = read_sheet("Desiderata")
                     df_r = read_sheet("Regles")
@@ -171,7 +167,7 @@ else:
                     meds = df_u.to_dict('records')
                     absences = set(df_d['Medecin'] + "_" + df_d['Date_OFF']) if not df_d.empty else set()
                     
-                    # Liste officielle des jours fériés 2026
+                    # Liste des jours fériés 2026
                     feries = ["2026-04-06", "2026-05-01", "2026-05-14", "2026-05-25", "2026-07-21", "2026-08-15"]
                     regles = df_r.set_index('Medecin').to_dict('index')
                     
@@ -187,8 +183,7 @@ else:
                             
                             # --- A. KENNEDY (Lundi -> bloc de 4j) ---
                             if date_c.weekday() == 0:
-                                j_jk = [0, 1, 2, 4]
-                                # Sécurité : Pas de Kennedy si un jour du bloc est férié
+                                j_jk = [0, 1, 2, 4] # Lun, Mar, Mer, Ven
                                 bloc_ferie = any((date_c + timedelta(days=d)).strftime("%Y-%m-%d") in feries for d in j_jk)
                                 
                                 if not bloc_ferie:
@@ -198,34 +193,33 @@ else:
                                     if dispos_jk:
                                         elu_jk = min(dispos_jk, key=lambda x: dettes[x['Medecin']])
                                         for d in j_jk:
-                                            d_str_jk = (date_c + timedelta(days=d)).strftime("%Y-%m-%d")
-                                            planning_final.append([d_str_jk, "JK (Kennedy)", elu_jk['Medecin'], 8])
+                                            curr_d = (date_c + timedelta(days=d)).strftime("%Y-%m-%d")
+                                            planning_final.append([curr_d, "JK (Kennedy)", elu_jk['Medecin'], 8])
                                             dettes[elu_jk['Medecin']] += (8 / elu_jk['ETP'])
 
                             # --- B. POSTE JOUR (JM) ---
-                            # Uniquement en semaine et si ce n'est pas un jour férié
                             if not is_we and d_str not in feries:
-                                deja_en_jk = [p[2] for p in planning_final if p[0] == d_str and p[1] == "JK (Kennedy)"]
-                                c_jm = [m for m in meds if m['Medecin'] not in deja_en_jk and f"{m['Medecin']}_{d_str}" not in absences]
+                                # Médecins pas encore en Kennedy aujourd'hui
+                                deja_en_poste = [p[2] for p in planning_final if p[0] == d_str]
+                                c_jm = [m for m in meds if m['Medecin'] not in deja_en_poste and f"{m['Medecin']}_{d_str}" not in absences]
                                 
                                 if c_jm:
                                     elu_jm = min(c_jm, key=lambda x: dettes[x['Medecin']])
                                     planning_final.append([d_str, "JM", elu_jm['Medecin'], 8])
                                     dettes[elu_jm['Medecin']] += (8 / elu_jm['ETP'])
 
-                            # --- C. GARDE (GM ou GW) ---
-                            # GW si Week-end OU Jour Férié
+                            # --- C. GARDE (GM ou GW) - TOUJOURS QUELQU'UN ---
                             p_type, h_p = ("GW", 24) if (is_we or d_str in feries) else ("GM", 24)
                             cands_g = []
                             for m in meds:
                                 nom = m['Medecin']
                                 r = regles.get(nom, {})
                                 
-                                # Vérification des droits
+                                # Vérification des droits selon l'onglet Regles
                                 if (is_we or d_str in feries) and r.get('Autorise_Garde_WE') != 'OUI': continue
                                 if (not is_we and d_str not in feries) and r.get('Autorise_Garde_Semaine') != 'OUI': continue
                                 
-                                # Sécurités : Pas déjà en poste aujourd'hui, pas OFF, Repos J+1
+                                # Pas déjà en JK ou JM, pas OFF, pas de garde la veille
                                 if any(p[0] == d_str and p[2] == nom for p in planning_final): continue
                                 if f"{nom}_{d_str}" in absences: continue
                                 h_hier = (date_c - timedelta(days=1)).strftime("%Y-%m-%d")
@@ -241,60 +235,6 @@ else:
                                 planning_final.append([d_str, p_type, "⚠️ VIDE", 0])
 
                     # --- 3. PUBLICATION ---
-                    df_res = pd.DataFrame(planning_final, columns=["Date", "Poste", "Medecin", "Heures"])
-                    ws_p = get_gsheet().worksheet("Planning")
-                    ws_p.clear()
-                    ws_p.append_row(["Date", "Poste", "Medecin", "Heures"])
-                    ws_p.append_rows(df_res.values.tolist())
-                    st.success("Planning généré et publié !")
-                    st.balloons()                                    
-                    
-                    dispos_jk = [m for m in c_jk if all(f"{m['Medecin']}_{(date_c + timedelta(days=d)).strftime('%Y-%m-%d')}" not in absences for d in j_jk)]
-                                    
-                                    if dispos_jk:
-                                        elu_jk = min(dispos_jk, key=lambda x: dettes[x['Medecin']])
-                                        for d in j_jk:
-                                            d_str_jk = (date_c + timedelta(days=d)).strftime("%Y-%m-%d")
-                                            planning_final.append([d_str_jk, "JK (Kennedy)", elu_jk['Medecin'], 8])
-                                            dettes[elu_jk['Medecin']] += (8 / elu_jk['ETP'])
-
-                            # --- B. POSTE JOUR (JM) - Uniquement en semaine hors férié ---
-                            if not is_we and d_str not in feries:
-                                # On exclut ceux déjà pris en JK aujourd'hui
-                                deja_pris = [p[2] for p in planning_final if p[0] == d_str]
-                                c_jm = [m for m in meds if m['Medecin'] not in deja_pris and f"{m['Medecin']}_{d_str}" not in absences]
-                                
-                                if c_jm:
-                                    elu_jm = min(c_jm, key=lambda x: dettes[x['Medecin']])
-                                    planning_final.append([d_str, "JM", elu_jm['Medecin'], 8])
-                                    dettes[elu_jm['Medecin']] += (8 / elu_jm['ETP'])
-
-                            # --- C. GARDE (GM ou GW) - Toujours quelqu'un ---
-                            p_type, h_p = ("GW", 24) if (is_we or d_str in feries) else ("GM", 24)
-                            cands_g = []
-                            for m in meds:
-                                nom = m['Medecin']
-                                r = regles.get(nom, {})
-                                
-                                if (is_we or d_str in feries) and r.get('Autorise_Garde_WE') != 'OUI': continue
-                                if (not is_we and d_str not in feries) and r.get('Autorise_Garde_Semaine') != 'OUI': continue
-                                
-                                # Sécurités : Pas déjà en JK ou JM, pas en OFF, Repos J+1
-                                if any(p[0] == d_str and p[2] == nom for p in planning_final): continue
-                                if f"{nom}_{d_str}" in absences: continue
-                                h_hier = (date_c - timedelta(days=1)).strftime("%Y-%m-%d")
-                                if any(p[0] == h_hier and p[2] == nom and "G" in p[1] for p in planning_final): continue
-                                
-                                cands_g.append(m)
-
-                            if cands_g:
-                                elu_g = min(cands_g, key=lambda x: dettes[x['Medecin']])
-                                planning_final.append([d_str, p_type, elu_g['Medecin'], h_p])
-                                dettes[elu_g['Medecin']] += (h_p / elu_g['ETP'])
-                            else:
-                                planning_final.append([d_str, p_type, "⚠️ VIDE", 0])
-
-                    # --- 3. ENREGISTREMENT ---
                     df_res = pd.DataFrame(planning_final, columns=["Date", "Poste", "Medecin", "Heures"])
                     ws_p = get_gsheet().worksheet("Planning")
                     ws_p.clear()
