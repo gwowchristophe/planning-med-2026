@@ -1,74 +1,82 @@
-import streamlit as st
-import pandas as pd
-import gspread
-from google.oauth2.service_account import Credentials
-import calendar
-
-# --- 1. CONFIGURATION (DOIT ÊTRE LA PREMIÈRE LIGNE) ---
-st.set_page_config(page_title="Planning Médical 2026", layout="wide")
-
-# --- 2. FONCTION DE CONNEXION ---
-def get_gsheet():
-    try:
-        creds_dict = {
-            "type": st.secrets["type"],
-            "project_id": st.secrets["project_id"],
-            "private_key_id": st.secrets["private_key_id"],
-            "private_key": st.secrets["private_key"],
-            "client_email": st.secrets["client_email"],
-            "client_id": st.secrets["client_id"],
-            "auth_uri": st.secrets["auth_uri"],
-            "token_uri": st.secrets["token_uri"],
-            "auth_provider_x509_cert_url": st.secrets["auth_provider_x509_cert_url"],
-            "client_x509_cert_url": st.secrets["client_x509_cert_url"],
-        }
-        scopes = [
-            "https://www.googleapis.com/auth/spreadsheets",
-            "https://www.googleapis.com/auth/drive"
-        ]
-        creds = Credentials.from_service_account_info(creds_dict, scopes=scopes)
-        client = gspread.authorize(creds)
-        return client.open_by_url(st.secrets["spreadsheet"])
-    except Exception as e:
-        st.error(f"Erreur de connexion Google : {e}")
-        return None
-
-def read_sheet(name):
-    sh = get_gsheet()
-    if sh:
-        return pd.DataFrame(sh.worksheet(name).get_all_records())
-    return pd.DataFrame()
-
-# --- 3. LOGIQUE D'AFFICHAGE ---
-if 'u' not in st.session_state:
-    st.title("🏥 Planning Mons/Warquignies")
-    
-    # Tentative de lecture des utilisateurs
-    try:
-        df_u = read_sheet("Users")
-        if not df_u.empty:
-            u_s = st.selectbox("Sélectionnez votre nom", df_u["Medecin"].tolist())
-            pw = st.text_input("Mot de passe", type="password")
-            
-            if st.button("Connexion"):
-                # Vérification du mot de passe (on convertit en string pour éviter les bugs)
-                correct_pw = str(df_u.loc[df_u["Medecin"] == u_s, "MDP"].values[0])
-                if pw == correct_pw:
-                    st.session_state.u = u_s
-                    st.rerun()
-                else:
-                    st.error("Mot de passe incorrect")
-        else:
-            st.error("L'onglet 'Users' est vide ou inaccessible.")
-    except Exception as e:
-        st.error(f"Erreur lors du chargement des utilisateurs : {e}")
-
 else:
-    # Interface une fois connecté
+    # --- BARRE LATÉRALE ---
     st.sidebar.success(f"Connecté : Dr. {st.session_state.u}")
+    
+    # Menu de navigation
+    menu = ["📅 Mes Désiderata", "🔄 Échanges", "🚀 Admin (Planning)", "🔑 Mot de passe"]
+    # Option Admin uniquement pour vous
+    if st.session_state.u != "Christophe Angelo":
+        menu.remove("🚀 Admin (Planning)")
+        
+    choix = st.sidebar.radio("Navigation", menu)
+
     if st.sidebar.button("Déconnexion"):
         del st.session_state.u
         st.rerun()
-    
-    st.write(f"Bienvenue sur votre espace de gestion, Dr. {st.session_state.u}")
-    # Ajoutez ici la suite de vos onglets (Désiderata, etc.)
+
+    # --- 1. ONGLET DÉSIDERATA ---
+    if choix == "📅 Mes Désiderata":
+        st.header("Vos Désiderata de congés 2026")
+        st.info("Cliquez sur un jour pour basculer entre Présent ✅ et Absent ❌")
+
+        # Sélection du mois (Avril à Août 2026 par exemple)
+        mois_noms = {4: "Avril", 5: "Mai", 6: "Juin", 7: "Juillet", 8: "Août"}
+        mois_sel = st.selectbox("Mois", options=list(mois_noms.keys()), format_func=lambda x: mois_noms[x])
+
+        # Chargement des données actuelles
+        df_desid = read_sheet("Desiderata")
+        
+        # On filtre les jours déjà pris par l'utilisateur connecté
+        # On s'assure que les dates sont comparées au format texte YYYY-MM-DD
+        jours_off = set(df_desid[df_desid["Medecin"] == st.session_state.u]["Date_OFF"].astype(str).tolist())
+
+        # Affichage du calendrier
+        cal = calendar.monthcalendar(2026, mois_sel)
+        semaines = ["Lun", "Mar", "Mer", "Jeu", "Ven", "Sam", "Dim"]
+        
+        # En-tête des jours
+        cols_header = st.columns(7)
+        for i, jour_nom in enumerate(semaines):
+            cols_header[i].write(f"**{jour_nom}**")
+
+        # Grille de boutons
+        for semaine in cal:
+            cols = st.columns(7)
+            for i, jour in enumerate(semaine):
+                if jour != 0:
+                    date_str = f"2026-{str(mois_sel).zfill(2)}-{str(jour).zfill(2)}"
+                    est_off = date_str in jours_off
+                    
+                    label = f"{jour} {'❌' if est_off else '✅'}"
+                    
+                    if cols[i].button(label, key=date_str):
+                        sh = get_gsheet()
+                        ws = sh.worksheet("Desiderata")
+                        
+                        if est_off:
+                            # Supprimer la ligne si on repasse en présent
+                            # On recharge pour trouver la bonne ligne
+                            all_data = ws.get_all_values()
+                            for idx, row in enumerate(all_data):
+                                if row[0] == st.session_state.u and row[1] == date_str:
+                                    ws.delete_rows(idx + 1)
+                                    break
+                        else:
+                            # Ajouter une ligne si on passe en absent
+                            ws.append_row([st.session_state.u, date_str])
+                        
+                        st.rerun()
+
+    # --- 2. ONGLET ADMIN (Aperçu global) ---
+    elif choix == "🚀 Admin (Planning)":
+        st.header("Vue d'ensemble (Admin)")
+        df_all = read_sheet("Desiderata")
+        if not df_all.empty:
+            st.write("Récapitulatif de toutes les absences :")
+            st.dataframe(df_all)
+        else:
+            st.write("Aucun desiderata encodé pour le moment.")
+
+    # --- 3. AUTRES ONGLETS (À remplir plus tard) ---
+    else:
+        st.write("Cette section est en cours de développement.")
