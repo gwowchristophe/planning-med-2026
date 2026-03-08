@@ -254,7 +254,9 @@ else:
                     ws_p.append_row(["Date", "Poste", "Medecin", "Heures"])
                     ws_p.append_rows(df_res.values.tolist())
                     st.success("Planning généré selon vos règles Google Sheet !")
-                    st.balloons()                                    dispos_jk = [m for m in c_jk if all(f"{m['Medecin']}_{(date_c + timedelta(days=d)).strftime('%Y-%m-%d')}" not in absences for d in j_jk)]
+                    st.balloons()                                    
+                    
+                    dispos_jk = [m for m in c_jk if all(f"{m['Medecin']}_{(date_c + timedelta(days=d)).strftime('%Y-%m-%d')}" not in absences for d in j_jk)]
                                     
                                     if dispos_jk:
                                         elu_jk = min(dispos_jk, key=lambda x: dettes[x['Medecin']])
