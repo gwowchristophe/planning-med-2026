@@ -15,7 +15,9 @@ conn = st.connection("gsheets", type=GSheetsConnection)
 
 # --- FONCTIONS DE LECTURE/ÉCRITURE ---
 def load_data(sheet_name):
-    return conn.read(spreadsheet=URL_SHEET, worksheet=sheet_name)
+    # Cette méthode transforme l'URL pour lire chaque onglet directement en CSV
+    csv_url = f"https://docs.google.com/spreadsheets/d/1tk032kmegtMoTwhbOzopRns-NW4gVeyeuAe7CUmvbUE/gviz/tq?tqx=out:csv&sheet={sheet_name}"
+    return pd.read_csv(csv_url)
 
 def save_data(df, sheet_name):
     conn.update(spreadsheet=URL_SHEET, worksheet=sheet_name, data=df)
