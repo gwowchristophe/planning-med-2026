@@ -122,80 +122,82 @@ else:
                 st.table(pd.DataFrame(bilan).sort_values("Dette (H/ETP)"))
 
         with t2:
-            st.subheader("Génération Harmonisée (Avril - Août)")
-            if st.button("🚀 Lancer le calcul global"):
-                with st.spinner("Application des 6 critères en cours..."):
+            st.subheader("Génération Dynamique via Google Sheets")
+            if st.button("🚀 Lancer la génération (Lecture des règles...)"):
+                with st.spinner("Synchronisation des règles et calcul..."):
+                    # --- 1. CHARGEMENT DES DONNÉES ---
                     df_u = read_sheet("Users")
                     df_d = read_sheet("Desiderata")
+                    df_r = read_sheet("Regles") # <--- LIT VOTRE NOUVEL ONGLET
+                    
+                    if df_r.empty:
+                        st.error("L'onglet 'Regles' est introuvable ou vide dans Google Sheets.")
+                        st.stop()
+
                     df_u['ETP'] = df_u['ETP'].apply(lambda x: float(str(x).replace(',','.')) if x else 1.0)
                     meds = df_u.to_dict('records')
                     absences = set(df_d['Medecin'] + "_" + df_d['Date_OFF']) if not df_d.empty else set()
                     
+                    # Transformation des règles en dictionnaire pour accès rapide
+                    regles = df_r.set_index('Medecin').to_dict('index')
+                    
                     dettes, planning_final = {m['Medecin']: 0.0 for m in meds}, []
 
+                    # --- 2. BOUCLE DE GÉNÉRATION (5 MOIS) ---
                     for mois in range(4, 9):
                         jours = calendar.monthrange(2026, mois)[1]
                         for j in range(1, jours + 1):
-                            # --- TOUT CE QUI SUIT EST LE NOUVEAU BLOC KENNEDY + GARDE ---
                             date_c = datetime(2026, mois, j)
                             d_str = date_c.strftime("%Y-%m-%d")
                             is_we = date_c.weekday() >= 5
                             
-                            # --- A. POSTE KENNEDY (Lundi, Mardi, Mercredi, Vendredi) ---
-                            if date_c.weekday() == 0:  # Si on est Lundi
-                                # On exclut Daryush, Christian, Elisa, Raouf du Kennedy
-                                candidats_jk = [m for m in meds if m['Medecin'] not in ['Daryush', 'Christian', 'Elisa', 'Raouf']]
-                                j_indices = [0, 1, 2, 4] # Index 3 (Jeudi) volontairement oublié
-                                
-                                # Vérification des absences sur les 4 jours
-                                dispos_jk = []
-                                for m in candidats_jk:
-                                    sem_ok = all(f"{m['Medecin']}_{(date_c + timedelta(days=d)).strftime('%Y-%m-%d')}" not in absences for d in j_indices)
-                                    if sem_ok: dispos_jk.append(m)
+                            # --- A. KENNEDY (Lun, Mar, Mer, Ven) ---
+                            if date_c.weekday() == 0:
+                                j_jk = [0, 1, 2, 4]
+                                c_jk = [m for m in meds if regles.get(m['Medecin'], {}).get('Autorise_Kennedy') == 'OUI']
+                                dispos_jk = [m for m in c_jk if all(f"{m['Medecin']}_{(date_c + timedelta(days=d)).strftime('%Y-%m-%d')}" not in absences for d in j_jk)]
                                 
                                 if dispos_jk:
                                     elu_jk = min(dispos_jk, key=lambda x: dettes[x['Medecin']])
-                                    for d in j_indices:
-                                        d_jk = (date_c + timedelta(days=d)).strftime("%Y-%m-%d")
-                                        planning_final.append([d_jk, "JK (Kennedy)", elu_jk['Medecin'], 8])
+                                    for d in j_jk:
+                                        planning_final.append([(date_c + timedelta(days=d)).strftime("%Y-%m-%d"), "JK (Kennedy)", elu_jk['Medecin'], 8])
                                         dettes[elu_jk['Medecin']] += (8 / elu_jk['ETP'])
 
-                            # --- B. POSTE GARDE (GM ou GW) ---
+                            # --- B. GARDE (24h) ---
                             poste, h_p = ("GW", 24) if is_we else ("GM", 24)
-                            
-                            candidats_garde = []
+                            cands = []
                             for m in meds:
                                 nom = m['Medecin']
-                                # 1. Pas déjà pris par le Kennedy aujourd'hui ?
-                                en_jk = any(p[0] == d_str and p[2] == nom and "JK" in p[1] for p in planning_final)
-                                if en_jk: continue
-                                # 2. Pas "OFF" ?
-                                if f"{nom}_{d_str}" in absences: continue
-                                # 3. Pas de garde la veille (Repos J+1) ?
-                                h_hier = (date_c - timedelta(days=1)).strftime("%Y-%m-%d")
-                                deja_hier = any(p[0] == h_hier and p[2] == nom and "G" in p[1] for p in planning_final)
-                                if deja_hier: continue
-                                # 4. Daryush (Pas de WE) ?
-                                if m.get('Is_Daryush') == 'OUI' and is_we: continue
-                                # 5. Max 2 gardes sur 8 jours ?
-                                h_8d = (date_c - timedelta(days=8)).strftime("%Y-%m-%d")
-                                nb_8j = len([p for p in planning_final if p[2] == nom and "G" in p[1] and p[0] > h_8d])
-                                if nb_8j >= 2: continue
+                                r = regles.get(nom, {})
                                 
-                                candidats_garde.append(m)
+                                # Filtres dynamiques selon Google Sheets
+                                if is_we and r.get('Autorise_Garde_WE') != 'OUI': continue
+                                if not is_we and r.get('Autorise_Garde_Semaine') != 'OUI': continue
+                                
+                                # Sécurités automatiques (Kennedy, OFF, Repos J+1, 8 jours)
+                                if any(p[0] == d_str and p[2] == nom and "JK" in p[1] for p in planning_final): continue
+                                if f"{nom}_{d_str}" in absences: continue
+                                
+                                h_hier = (date_c - timedelta(days=1)).strftime("%Y-%m-%d")
+                                if any(p[0] == h_hier and p[2] == nom and "G" in p[1] for p in planning_final): continue
+                                
+                                h_8d = (date_c - timedelta(days=8)).strftime("%Y-%m-%d")
+                                if len([p for p in planning_final if p[2] == nom and "G" in p[1] and p[0] > h_8d]) >= 2: continue
+                                
+                                cands.append(m)
 
-                            if candidats_garde:
-                                élu = min(candidats_garde, key=lambda x: dettes[x['Medecin']])
-                                dettes[élu['Medecin']] += (h_p / élu['ETP'])
-                                planning_final.append([d_str, poste, élu['Medecin'], h_p])
+                            if cands:
+                                elu = min(cands, key=lambda x: dettes[x['Medecin']])
+                                dettes[elu['Medecin']] += (h_p / elu['ETP'])
+                                planning_final.append([d_str, poste, elu['Medecin'], h_p])
                             else:
                                 planning_final.append([d_str, poste, "⚠️ VIDE", 0])
-                            # --- FIN DU BLOC À REMPLACER ---
 
+                    # --- 3. PUBLICATION FINALE ---
                     df_res = pd.DataFrame(planning_final, columns=["Date", "Poste", "Medecin", "Heures"])
-                    st.success("Calcul terminé !")
                     ws_p = get_gsheet().worksheet("Planning")
                     ws_p.clear()
                     ws_p.append_row(["Date", "Poste", "Medecin", "Heures"])
                     ws_p.append_rows(df_res.values.tolist())
+                    st.success("Planning généré selon vos règles Google Sheet !")
                     st.balloons()
