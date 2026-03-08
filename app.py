@@ -1,8 +1,8 @@
 import streamlit as st
 import pandas as pd
-import os, calendar, random
+import os, calendar, random, io
 from datetime import date, datetime, timedelta
-import holidays # Assurez-vous que cette bibliothèque est installée
+import holidays
 
 st.set_page_config(page_title="Planning 2026", layout="wide")
 VALS = {"GW": 24, "GM": 24, "JK": 9, "JM": 7}
@@ -43,7 +43,6 @@ def check(n, d, p, pl, vo):
     if p == "JK" and not MEDS[n]["jk"]: return False
     return True
 
-# Login
 if 'user' not in st.session_state:
     st.title("🏥 Accès 2026")
     u_df = gd(DB_F)
@@ -55,9 +54,11 @@ if 'user' not in st.session_state:
             st.rerun()
 else:
     st.sidebar.title(st.session_state.user)
-    m = ["📅 OFF", "🚀 Générateur", "🔐 Code", "Sortie"]
-    if st.session_state.user != "Christophe Angelo": m.remove("🚀 Générateur")
+    m = ["📅 OFF"]
+    if st.session_state.user == "Christophe Angelo": m.append("🚀 Générateur")
+    m.extend(["🔐 Code", "Sortie"])
     sel = st.sidebar.radio("Menu", m)
+    
     nms = {4:"Avril", 5:"Mai", 6:"Juin", 7:"Juillet", 8:"Août"}
     fr_days = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"]
 
@@ -90,7 +91,7 @@ else:
                 is_off_day = (d.weekday() >= 5) or (d in BE_HOLIDAYS)
                 for p in ["GW", "GM", "JK", "JM"]:
                     if is_off_day and p in ["JK", "JM"]: continue
-                    if not is_off_day and p == "JK" and d.weekday() == 3: continue # Pas de JK le Jeudi
+                    if not is_off_day and p == "JK" and d.weekday() == 3: continue 
                     try:
                         c = next(m for m in ml if m not in jp.values() and check(m, d, p, pl, vo))
                         jp[p], stt[c] = c, stt[c] + VALS[p]
@@ -98,29 +99,38 @@ else:
                 if not ok: break
                 pl[d] = jp
             
-            if not ok: st.error("Impossible")
+            if not ok: st.error("Impossible : Conflit de contraintes")
             else:
+                st.success(f"Planning de {nms[mg]} généré")
                 df_res = pd.DataFrame.from_dict(pl, orient='index')
                 df_res.index = [f"{fr_days[d.weekday()]} {d}" for d in df_res.index]
                 
-                def highlight_off(row):
-                    d_str = row.name.split(' ')[1]
-                    d_obj = date.fromisoformat(d_str)
-                    if d_obj.weekday() >= 5 or d_obj in BE_HOLIDAYS:
-                        return ['background-color: #d3d3d3'] * len(row)
+                def style_rows(row):
+                    d_s = row.name.split(' ')[1]
+                    d_o = date.fromisoformat(d_s)
+                    if d_o.weekday() >= 5 or d_o in BE_HOLIDAYS:
+                        return ['background-color: #f0f2f6'] * len(row)
                     return [''] * len(row)
 
-                st.dataframe(df_res.style.apply(highlight_off, axis=1), use_container_width=True)
-                res = [{"Nom":m, "H":h, "C":int(160*MEDS[m]["etp"])} for m,h in stt.items()]
+                st.dataframe(df_res.style.apply(style_rows, axis=1), use_container_width=True)
+                
+                # Export Excel
+                buffer = io.BytesIO()
+                with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
+                    df_res.to_excel(writer, sheet_name='Planning')
+                st.download_button(label="📥 Télécharger en Excel", data=buffer, file_name=f"Planning_{nms[mg]}.xlsx", mime="application/vnd.ms-excel")
+
+                res = [{"Nom":m, "Heures":h, "Cible":int(160*MEDS[m]["etp"])} for m,h in stt.items()]
+                st.subheader("⚖️ Récapitulatif des heures")
                 st.table(pd.DataFrame(res))
 
     elif sel == "🔐 Code":
-        np = st.text_input("Nouveau", type="password")
+        np = st.text_input("Nouveau code", type="password")
         if st.button("Valider"):
             u = gd(DB_F)
             u.loc[u["Medecin"]==st.session_state.user, "MDP"] = np
-            sd(u, DB_F); st.success("OK")
+            sd(u, DB_F); st.success("Mis à jour")
 
     if sel == "Sortie":
-        del st.session_state.user
+        if 'user' in st.session_state: del st.session_state.user
         st.rerun()
