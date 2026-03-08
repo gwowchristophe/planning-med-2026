@@ -172,16 +172,16 @@ else:
                 st.table(pd.DataFrame(bilan).sort_values("Ratio H/ETP"))
 
         with t2:
-            st.subheader("Générateur : Configuration GM 7j/7 & Christian Davin")
+            st.subheader("Générateur : GM 7/7 & Restrictions Strictes")
             if st.button("🚀 Lancer la génération"):
-                with st.spinner("Application des règles strictes (GM 7/7)..."):
+                with st.spinner("Application des règles (Elisa Mastrodicasa, Raouf Sheta, Christian Davin)..."):
                     # --- 1. CHARGEMENT ---
                     df_u = read_sheet("Users")
                     df_d = read_sheet("Desiderata")
                     df_r = read_sheet("Regles")
                     
                     if df_u.empty or df_r.empty:
-                        st.error("Données manquantes.")
+                        st.error("Données 'Users' ou 'Regles' manquantes.")
                         st.stop()
 
                     df_u['ETP'] = df_u['ETP'].apply(lambda x: float(str(x).replace(',','.')) if x else 1.0)
@@ -194,6 +194,7 @@ else:
                     heures_reelles = {m['Medecin']: 0.0 for m in meds}
                     rouges_reels = {m['Medecin']: 0 for m in meds}
 
+                    # --- 2. FONCTIONS INTERNES ---
                     def select_best_candidate(candidats):
                         return min(candidats, key=lambda m: (heures_reelles[m['Medecin']]/m['ETP']) + (rouges_reels[m['Medecin']]/m['ETP']))
 
@@ -202,9 +203,11 @@ else:
                         recent = [p for p in planning_final if p[2] == nom and start_f <= datetime.strptime(p[0], "%Y-%m-%d") < date_obj]
                         if len(recent) >= 2:
                             if (date_obj - datetime.strptime(recent[-1][0], "%Y-%m-%d")).days < 2: return False
-                        if any(p[0] == (date_obj - timedelta(days=1)).strftime("%Y-%m-%d") and p[2] == nom for p in planning_final): return False
+                        hier = (date_obj - timedelta(days=1)).strftime("%Y-%m-%d")
+                        if any(p[0] == hier and p[2] == nom for p in planning_final): return False
                         return True
 
+                    # --- 3. BOUCLE ---
                     for mois in range(4, 9):
                         jours = calendar.monthrange(2026, mois)[1]
                         for j in range(1, jours + 1):
@@ -212,44 +215,39 @@ else:
                             d_str = date_c.strftime("%Y-%m-%d")
                             is_rouge = (date_c.weekday() >= 5 or d_str in feries)
                             
-                            # --- A. JK (Kennedy) : Priorité Lundi ---
-                            # On force un Kennedy chaque semaine, même si écourtée par un férié
+                            # A. KENNEDY (Attribution le lundi pour la semaine)
                             if date_c.weekday() == 0:
-                                jours_potentiels = [0, 1, 2, 4] # Lun, Mar, Mer, Ven
-                                dates_jk = [(date_c + timedelta(days=d)).strftime("%Y-%m-%d") for d in jours_potentiels]
-                                # Filtrer les jours qui tombent sur un férié
-                                dates_jk_actives = [d for d in dates_jk if d not in feries]
+                                jours_jk = [0, 1, 2, 4]
+                                dates_actives = [(date_c + timedelta(days=d)).strftime("%Y-%m-%d") for d in jours_jk if (date_c + timedelta(days=d)).strftime("%Y-%m-%d") not in feries]
                                 
                                 c_jk = [m for m in meds if regles.get(m['Medecin'], {}).get('Autorise_Kennedy') == 'OUI' and m['Medecin'] not in jk_hist[:7]]
-                                dispos = [m for m in c_jk if all(f"{m['Medecin']}_{d}" not in absences for d in dates_jk_actives) and all(check_fatigue(m['Medecin'], datetime.strptime(d, "%Y-%m-%d")) for d in dates_jk_actives)]
-                                
+                                dispos = [m for m in c_jk if all(f"{m['Medecin']}_{d}" not in absences for d in dates_actives) and all(check_fatigue(m['Medecin'], datetime.strptime(d, "%Y-%m-%d")) for d in dates_actives)]
                                 if dispos:
                                     elu = select_best_candidate(dispos)
-                                    for d_jk in dates_jk_actives:
+                                    for d_jk in dates_actives:
                                         planning_final.append([d_jk, "JK", elu['Medecin'], 8])
                                         heures_reelles[elu['Medecin']] += 8
                                     jk_hist.append(elu['Medecin'])
 
-                            # --- B. DARYUSH VALADI (JM) ---
+                            # B. DARYUSH VALADI (JM)
                             nom_dv = "Daryush Valadi"
-                            if nom_dv in heures_reelles:
-                                is_sem_A = (date_c.isocalendar()[1] % 2 == 0)
-                                if date_c.weekday() in ([1,2,3] if is_sem_A else [2,3,4]) and not is_rouge:
-                                    if f"{nom_dv}_{d_str}" not in absences and not any(p[0]==d_str and p[1]=="JK" for p in planning_final):
-                                        planning_final.append([d_str, "JM", nom_dv, 8])
-                                        heures_reelles[nom_dv] += 8
+                            is_sem_A = (date_c.isocalendar()[1] % 2 == 0)
+                            if date_c.weekday() in ([1,2,3] if is_sem_A else [2,3,4]) and not is_rouge:
+                                if f"{nom_dv}_{d_str}" not in absences:
+                                    planning_final.append([d_str, "JM", nom_dv, 8])
+                                    heures_reelles[nom_dv] += 8
 
-                            # --- C. JM (Pour les autres) ---
-                            if not is_rouge and not any(p[0] == d_str and p[1] in ["JK", "JM"] for p in planning_final):
+                            # C. JM (Pour les autres)
+                            if not is_rouge and not any(p[0]==d_str and p[1] in ["JK", "JM"] for p in planning_final):
                                 c_jm = [m for m in meds if m['Medecin'] != nom_dv and regles.get(m['Medecin'], {}).get('Autorise_Kennedy') == 'OUI' and not any(p[0] == d_str and p[2] == m['Medecin'] for p in planning_final) and f"{m['Medecin']}_{d_str}" not in absences and check_fatigue(m['Medecin'], date_c)]
                                 if c_jm:
                                     elu = select_best_candidate(c_jm)
                                     planning_final.append([d_str, "JM", elu['Medecin'], 8])
                                     heures_reelles[elu['Medecin']] += 8
 
-                            # --- D. GARDES (GM et GW) ---
-                            # GM TOUS LES JOURS
-                            c_gm = [m for m in meds if m['Medecin'] not in [nom_dv, "Christian Davin", "Raouf", "Elisa"] and regles.get(m['Medecin'], {}).get('Autorise_Garde_Semaine') == 'OUI']
+                            # D. GARDES GM (7j/7) - Exclut Elisa, Raouf, Christian
+                            exclus_gm = ["Daryush Valadi", "Christian Davin", "Elisa Mastrodicasa", "Raouf Sheta"]
+                            c_gm = [m for m in meds if m['Medecin'] not in exclus_gm]
                             cands_gm = [m for m in c_gm if not any(p[0] == d_str and p[2] == m['Medecin'] for p in planning_final) and f"{m['Medecin']}_{d_str}" not in absences and check_fatigue(m['Medecin'], date_c)]
                             if cands_gm:
                                 elu = select_best_candidate(cands_gm)
@@ -258,9 +256,8 @@ else:
                                 if is_rouge: rouges_reels[elu['Medecin']] += 1
                             else: planning_final.append([d_str, "GM", "⚠️ VIDE", 0])
 
-                            # GW TOUS LES JOURS
-                            c_gw = [m for m in meds if m['Medecin'] != nom_dv]
-                            # Christian, Raouf et Elisa sont inclus ici par défaut
+                            # E. GARDES GW (7j/7) - Inclut tout le monde sauf Daryush
+                            c_gw = [m for m in meds if m['Medecin'] != "Daryush Valadi"]
                             cands_gw = [m for m in c_gw if not any(p[0] == d_str and p[2] == m['Medecin'] for p in planning_final) and f"{m['Medecin']}_{d_str}" not in absences and check_fatigue(m['Medecin'], date_c)]
                             if cands_gw:
                                 elu = select_best_candidate(cands_gw)
@@ -275,5 +272,5 @@ else:
                     ws.clear()
                     ws.append_row(["Date", "Poste", "Medecin", "Heures"])
                     ws.append_rows(df_res.values.tolist())
-                    st.success("Planning généré avec GM 7/7 et Christian Davin en GW !")
+                    st.success("Planning généré avec succès !")
                     st.balloons()
