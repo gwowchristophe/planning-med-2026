@@ -104,18 +104,34 @@ else:
         t1, t2 = st.tabs(["📊 Bilan d'Équité", "⚙️ Générateur 5 Mois"])
 
         with t1:
+            st.subheader("Analyse de la Dette (Heures / ETP)")
             df_u = read_sheet("Users")
             df_p = read_sheet("Planning")
+            
+            # --- CORRECTION ROBUSTE ---
+            # Si le planning est vide, on crée un tableau vide avec la colonne Heures pour éviter le crash
+            if df_p.empty or 'Heures' not in df_p.columns:
+                df_p = pd.DataFrame(columns=["Date", "Poste", "Medecin", "Heures"])
+            
             if not df_u.empty:
                 bilan = []
                 for _, r in df_u.iterrows():
                     nom = r['Medecin']
-                    etp = float(str(r['ETP']).replace(',','.')) if r['ETP'] else 1.0
-                    m_p = df_p[df_p['Medecin'] == nom] if not df_p.empty else pd.DataFrame()
+                    # Sécurité sur l'ETP
+                    try:
+                        etp = float(str(r['ETP']).replace(',','.')) if r['ETP'] else 1.0
+                    except:
+                        etp = 1.0
+                    
+                    m_p = df_p[df_p['Medecin'] == nom]
+                    # On force la conversion en nombre, si vide ou erreur -> 0
                     hrs = pd.to_numeric(m_p['Heures'], errors='coerce').sum()
+                    
                     bilan.append({
-                        "Médecin": nom, "ETP": etp, "Heures": hrs,
-                        "Dette (H/ETP)": round(hrs/etp, 1),
+                        "Médecin": nom, 
+                        "ETP": etp, 
+                        "Heures": hrs,
+                        "Dette (H/ETP)": round(hrs/etp, 1) if etp > 0 else 0,
                         "Nuits": len(m_p[m_p['Poste'].str.contains("G", na=False)]),
                         "WE": len(m_p[m_p['Poste'].str.contains("GW", na=False)])
                     })
