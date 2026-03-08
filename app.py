@@ -90,39 +90,6 @@ else:
                         else: ws.append_row([st.session_state.u, d_s])
                         st.rerun()
 
-    elif choix == "📊 Planning Global":
-        st.header("Planning Global 2026")
-        df_p = read_sheet("Planning")
-        if not df_p.empty:
-            df_p['Date'] = pd.to_datetime(df_p['Date'])
-            m_v = st.selectbox("Mois", [4,5,6,7,8], format_func=lambda x: calendar.month_name[x])
-            df_m = df_p[df_p['Date'].dt.month == m_v].copy()
-            
-            if not df_m.empty:
-                # Création du tableau croisé (Dates en lignes, Postes en colonnes)
-                df_pivot = df_m.pivot(index='Date', columns='Poste', values='Medecin').fillna("-")
-                
-                # Tri des colonnes pour la clarté
-                cols_target = ["JK (Kennedy)", "GM", "GW", "JM"]
-                df_pivot = df_pivot[[c for c in cols_target if c in df_pivot.columns]]
-                
-                # Jours fériés 2026 (Belgique)
-                feries = ["2026-04-06", "2026-05-01", "2026-05-14", "2026-05-25", "2026-07-21", "2026-08-15"]
-
-                def style_planning(row):
-                    d = row.name
-                    is_we = d.weekday() >= 5
-                    is_ferie = d.strftime('%Y-%m-%d') in feries
-                    if is_we or is_ferie:
-                        return ['background-color: #E0E0E0; color: black; font-weight: bold'] * len(row)
-                    return [''] * len(row)
-
-                st.dataframe(df_pivot.style.apply(style_planning, axis=1), use_container_width=True, height=800)
-            else:
-                st.info("Aucune donnée pour ce mois.")
-        else:
-            st.warning("Le planning est vide. Allez dans Admin > Générateur.")
-
     elif choix == "🚀 Admin":
         st.header("Console Administrateur")
         t1, t2 = st.tabs(["📊 Bilan d'Équité", "⚙️ Générateur 5 Mois"])
@@ -143,17 +110,10 @@ else:
                     m_p = df_p[df_p['Medecin'] == nom]
                     
                     hrs_tot = m_p['Heures'].sum()
-                    
-                    # Décompte WE ET Fériés réels
-                    jours_rouges = 0
-                    for d_str in m_p['Date']:
-                        d_obj = pd.to_datetime(d_str)
-                        if d_obj.weekday() >= 5 or d_str in feries:
-                            jours_rouges += 1
+                    jours_rouges = sum(1 for d in m_p['Date'] if pd.to_datetime(d).weekday() >= 5 or d in feries)
                     
                     bilan.append({
-                        "Médecin": nom,
-                        "ETP": etp,
+                        "Médecin": nom, "ETP": etp,
                         "Heures Totales": int(hrs_tot),
                         "Ratio H/ETP": round(hrs_tot / etp, 1),
                         "Nb Gardes (Nuits)": len(m_p[m_p['Poste'].isin(["GM", "GW"])]),
@@ -161,13 +121,12 @@ else:
                         "Ratio Rouges/ETP": round(jours_rouges / etp, 1),
                         "Blocs JK": len(m_p[m_p['Poste'] == "JK (Kennedy)"]) // 4
                     })
-                
                 st.table(pd.DataFrame(bilan).sort_values("Ratio H/ETP"))
 
         with t2:
-            st.subheader("Générateur : Équilibrage WE/Fériés inclus")
+            st.subheader("Générateur : Configuration Daryush Valadi")
             if st.button("🚀 Lancer la génération"):
-                with st.spinner("Analyse des contraintes et des jours fériés..."):
+                with st.spinner("Application des règles strictes..."):
                     df_u = read_sheet("Users")
                     df_d = read_sheet("Desiderata")
                     df_r = read_sheet("Regles")
@@ -178,91 +137,6 @@ else:
                     absences = set(df_d['Medecin'] + "_" + df_d['Date_OFF'])
                     feries = ["2026-04-06", "2026-05-01", "2026-05-14", "2026-05-25", "2026-07-21", "2026-08-15"]
                     
-                    planning_final = []
+                    planning_final, jk_hist = [], []
                     heures_reelles = {m['Medecin']: 0.0 for m in meds}
-                    rouges_reels = {m['Medecin']: 0 for m in meds}
-                    jk_hist = []
-
-                    def select_best_candidate(candidats):
-                        """Équilibre selon deux axes : Volume horaire et Pénibilité (Jours Rouges)"""
-                        def calcul_score(m):
-                            nom = m['Medecin']
-                            etp = m['ETP']
-                            # On cherche le plus petit cumul de ratios
-                            return (heures_reelles[nom] / etp) + (rouges_reels[nom] / etp)
-                        return min(candidats, key=calcul_score)
-
-                    def check_fatigue(nom, date_obj):
-                        # 8 jours glissants : Max 2 postes
-                        start_f = date_obj - timedelta(days=7)
-                        recent = [p for p in planning_final if p[2] == nom and start_f <= datetime.strptime(p[0], "%Y-%m-%d") < date_obj]
-                        if len(recent) >= 2:
-                            dernier_p = datetime.strptime(recent[-1][0], "%Y-%m-%d")
-                            if (date_obj - dernier_p).days < 2: return False
-                        # Repos de sécurité J+1 (Garde ou Journée)
-                        hier = (date_obj - timedelta(days=1)).strftime("%Y-%m-%d")
-                        if any(p[0] == hier and p[2] == nom for p in planning_final): return False
-                        return True
-
-                    for mois in range(4, 9):
-                        jours = calendar.monthrange(2026, mois)[1]
-                        for j in range(1, jours + 1):
-                            date_c = datetime(2026, mois, j)
-                            d_str = date_c.strftime("%Y-%m-%d")
-                            # DEFINITION JOUR ROUGE (WE ou Férié)
-                            is_rouge = date_c.weekday() >= 5 or d_str in feries
-                            
-                            # --- A. KENNEDY ---
-                            if date_c.weekday() == 0:
-                                j_jk = [0, 1, 2, 4]
-                                bloc_dates = [(date_c + timedelta(days=d)).strftime("%Y-%m-%d") for d in j_jk]
-                                if not any(d in feries for d in bloc_dates):
-                                    c_jk = [m for m in meds if regles.get(m['Medecin'], {}).get('Autorise_Kennedy') == 'OUI' and m['Medecin'] not in jk_hist[:7]]
-                                    dispos = [m for m in c_jk if all(f"{m['Medecin']}_{d}" not in absences for d in bloc_dates) and all(check_fatigue(m['Medecin'], date_c + timedelta(days=d)) for d in j_jk)]
-                                    if dispos:
-                                        elu = select_best_candidate(dispos)
-                                        for d_jk in bloc_dates:
-                                            planning_final.append([d_jk, "JK (Kennedy)", elu['Medecin'], 8])
-                                            heures_reelles[elu['Medecin']] += 8
-                                        jk_hist.append(elu['Medecin'])
-
-                            # --- B. DARYUSH (Planning immuable) ---
-                            is_sem_A = (date_c.isocalendar()[1] % 2 == 0)
-                            j_dar = [1,2,3] if is_sem_A else [2,3,4]
-                            if date_c.weekday() in j_dar and not is_rouge: # Daryush ne travaille pas les jours fériés
-                                if f"Daryush_{d_str}" not in absences:
-                                    planning_final.append([d_str, "JM", "Daryush", 8])
-                                    heures_reelles["Daryush"] += 8
-
-                            # --- C. JM (Uniquement si pas rouge) ---
-                            if not is_rouge:
-                                if not any(p[0] == d_str and p[1] == "JM" for p in planning_final):
-                                    c_jm = [m for m in meds if m['Medecin'] != "Daryush" and regles.get(m['Medecin'], {}).get('Autorise_Kennedy') == 'OUI' and not any(p[0] == d_str and p[2] == m['Medecin'] for p in planning_final) and f"{m['Medecin']}_{d_str}" not in absences and check_fatigue(m['Medecin'], date_c)]
-                                    if c_jm:
-                                        elu = select_best_candidate(c_jm)
-                                        planning_final.append([d_str, "JM", elu['Medecin'], 8])
-                                        heures_reelles[elu['Medecin']] += 8
-
-                            # --- D. GARDE (GM/GW) ---
-                            p_type, h_p = ("GW", 24) if is_rouge else ("GM", 24)
-                            c_g = [m for m in meds if m['Medecin'] != "Daryush"]
-                            if is_rouge: c_g = [m for m in c_g if regles.get(m['Medecin'], {}).get('Autorise_Garde_WE') == 'OUI']
-                            else: c_g = [m for m in c_g if regles.get(m['Medecin'], {}).get('Autorise_Garde_Semaine') == 'OUI']
-                            
-                            cands = [m for m in c_g if not any(p[0] == d_str and p[2] == m['Medecin'] for p in planning_final) and f"{m['Medecin']}_{d_str}" not in absences and check_fatigue(m['Medecin'], date_c)]
-                            if cands:
-                                elu = select_best_candidate(cands)
-                                planning_final.append([d_str, p_type, elu['Medecin'], h_p])
-                                heures_reelles[elu['Medecin']] += h_p
-                                if is_rouge: rouges_reels[elu['Medecin']] += 1
-                            else:
-                                planning_final.append([d_str, p_type, "⚠️ VIDE", 0])
-
-                    # 3. ENREGISTREMENT
-                    df_res = pd.DataFrame(planning_final, columns=["Date", "Poste", "Medecin", "Heures"])
-                    ws = get_gsheet().worksheet("Planning")
-                    ws.clear()
-                    ws.append_row(["Date", "Poste", "Medecin", "Heures"])
-                    ws.append_rows(df_res.values.tolist())
-                    st.success("Planning généré avec succès !")
-                    st.balloons()
+                    rouges_reels = {m['Medecin']: 0 for m in
