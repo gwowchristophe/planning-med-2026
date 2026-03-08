@@ -286,3 +286,4 @@ else:
                     ws.append_rows(df_res.values.tolist())
                     st.success("Planning généré avec succès !")
                     st.balloons()
+
