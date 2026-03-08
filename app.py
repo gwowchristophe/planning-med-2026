@@ -8,7 +8,7 @@ import holidays
 # --- CONFIGURATION ---
 st.set_page_config(page_title="Planning Médical 2026", layout="wide")
 V = {"GW": 24, "GM": 24, "JK": 9, "JM": 7}
-URL_SHEET = "https://docs.google.com/spreadsheets/d/1tk032kmegtMoTwhbOzopRns-NW4gVeyeuAe7CUmvbUE/edit#gid=0" # À REMPLACER
+URL_SHEET = "https://docs.google.com/spreadsheets/d/1tk032kmegtMoTwhbOzopRns-NW4gVeyeuAe7CUmvbUE/export?format=csv" # À REMPLACER
 
 # Connexion à Google Sheets
 conn = st.connection("gsheets", type=GSheetsConnection)
