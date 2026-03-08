@@ -1,14 +1,14 @@
 import streamlit as st
 import pandas as pd
 import os
-from datetime import date
+from datetime import date, timedelta
 
 # --- CONFIGURATION ---
 st.set_page_config(page_title="Planning Dragon 2026", layout="centered")
 DB_FILE = "users_db.csv"
 OFF_FILE = "desiderata_db.csv"
 
-# Initialisation des fichiers si inexistants
+# Initialisation des fichiers
 if not os.path.exists(DB_FILE):
     meds = ["Alex", "Christophe", "Julie", "Camie", "Martin", "Simon", "Gauthier", "Alfredo", "Raouf", "Elisa", "Christian", "Daryush"]
     pd.DataFrame({"Medecin": meds, "MDP": ["Doudoudragon"] * len(meds)}).to_csv(DB_FILE, index=False)
@@ -16,7 +16,6 @@ if not os.path.exists(DB_FILE):
 if not os.path.exists(OFF_FILE):
     pd.DataFrame(columns=["Medecin", "Date_OFF"]).to_csv(OFF_FILE, index=False)
 
-# Fonctions de lecture/écriture
 def get_data(file): return pd.read_csv(file)
 def save_data(df, file): df.to_csv(file, index=False)
 
@@ -35,57 +34,60 @@ if 'user' not in st.session_state:
         else:
             st.error("Mot de passe incorrect.")
 else:
-    # --- INTERFACE CONNECTÉE ---
+    # --- INTERFACE ---
     st.sidebar.title(f"Dr {st.session_state.user}")
-    menu = st.sidebar.radio("Menu", ["📅 Mes OFF (Multiples)", "🔐 Changer MDP", "⚙️ Admin (Sauvegarde)", "Logout"])
+    menu = st.sidebar.radio("Menu", ["📅 Mes Desiderata", "🔐 Changer MDP", "⚙️ Admin", "Logout"])
 
-    if menu == "📅 Mes OFF (Multiples)":
+    if menu == "📅 Mes Desiderata":
         st.header("Encoder vos indisponibilités")
-        st.info("Vous pouvez sélectionner plusieurs dates isolées.")
         
-        # SOLUTION : Utiliser l'option 'toggle' ou une liste de sélection
-        # Pour Streamlit, le plus propre pour du multi-dates éparpillées :
+        # Récupérer les dates déjà sauvées
         all_off = get_data(OFF_FILE)
-        current_off = all_off[all_off["Medecin"] == st.session_state.user]["Date_OFF"].tolist()
+        current_user_off = all_off[all_off["Medecin"] == st.session_state.user]["Date_OFF"].tolist()
         
-        st.write("Dates déjà enregistrées :", ", ".join(current_off) if current_off else "Aucune")
+        st.subheader("1. Ajouter des dates")
+        st.info("Sélectionnez une date seule ou une période (Début et Fin).")
         
-        new_date = st.date_input("Ajouter une date OFF :", min_value=date(2026, 4, 1), max_value=date(2026, 8, 31))
-        
-        col1, col2 = st.columns(2)
-        with col1:
-            if st.button("➕ Ajouter cette date"):
-                if str(new_date) not in current_off:
-                    new_row = pd.DataFrame({"Medecin": [st.session_state.user], "Date_OFF": [str(new_date)]})
-                    all_off = pd.concat([all_off, new_row])
-                    save_data(all_off, OFF_FILE)
-                    st.success(f"Date {new_date} ajoutée.")
-                    st.rerun()
-        with col2:
-            if st.button("🗑️ Tout effacer mes OFF"):
+        # Calendrier mode 'range'
+        selected_range = st.date_input(
+            "Sélectionnez vos dates :",
+            value=None,
+            min_value=date(2026, 4, 1),
+            max_value=date(2026, 8, 31),
+            help="Cliquez une fois pour un jour seul, deux fois pour une période."
+        )
+
+        if st.button("➕ Ajouter à ma liste"):
+            if selected_range:
+                # Si c'est une période (liste de 2 dates)
+                if isinstance(selected_range, list) or isinstance(selected_range, tuple):
+                    if len(selected_range) == 2:
+                        start, end = selected_range
+                        delta = end - start
+                        new_dates = [(start + timedelta(days=i)).strftime("%Y-%m-%d") for i in range(delta.days + 1)]
+                    else: # Une seule date sélectionnée dans le calendrier
+                        new_dates = [selected_range[0].strftime("%Y-%m-%d")]
+                else: # Date unique
+                    new_dates = [selected_range.strftime("%Y-%m-%d")]
+
+                # Ajouter sans doublons
+                new_rows = pd.DataFrame([{"Medecin": st.session_state.user, "Date_OFF": d} for d in new_dates if d not in current_user_off])
+                all_off = pd.concat([all_off, new_rows], ignore_index=True)
+                save_data(all_off, OFF_FILE)
+                st.success(f"{len(new_rows)} jour(s) ajouté(s) !")
+                st.rerun()
+
+        st.divider()
+        st.subheader("2. Récapitulatif de vos jours OFF")
+        if current_user_off:
+            current_user_off.sort()
+            st.write(f"Vous avez **{len(current_user_off)}** jours d'indisponibilité au total.")
+            st.write(", ".join(current_user_off))
+            
+            if st.button("🗑️ Tout effacer et recommencer"):
                 all_off = all_off[all_off["Medecin"] != st.session_state.user]
                 save_data(all_off, OFF_FILE)
                 st.warning("Toutes vos dates ont été supprimées.")
                 st.rerun()
-
-    elif menu == "⚙️ Admin (Sauvegarde)":
-        st.header("Zone Administrateur")
-        st.write("Téléchargez les données pour ne rien perdre sur votre PC :")
-        
-        off_data = get_data(OFF_FILE)
-        st.download_button("📥 Télécharger les Desiderata (CSV)", off_data.to_csv(index=False), "export_desiderata.csv", "text/csv")
-        
-        user_data = get_data(DB_FILE)
-        st.download_button("📥 Télécharger les Mots de Passe (CSV)", user_data.to_csv(index=False), "export_users.csv", "text/csv")
-
-    elif menu == "🔐 Changer MDP":
-        new_p = st.text_input("Nouveau MDP", type="password")
-        if st.button("Valider"):
-            u_df = get_data(DB_FILE)
-            u_df.loc[u_df["Medecin"] == st.session_state.user, "MDP"] = new_p
-            save_data(u_df, DB_FILE)
-            st.success("MDP changé !")
-
-    if menu == "Logout":
-        del st.session_state.user
-        st.rerun()
+        else:
+            
