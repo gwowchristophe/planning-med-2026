@@ -27,7 +27,6 @@ MDS = {
     "Simon Van Migem": {"e": 0.8, "j": 1, "t": 0}
 }
 
-# --- FONCTIONS ---
 def gd(f): return pd.read_csv(f) if os.path.exists(f) else pd.DataFrame()
 def sd(df, f): df.to_csv(f, index=False)
 def get_s(n, stt): return stt[n] / MDS[n]["e"]
@@ -72,35 +71,36 @@ def create_ics(name, df_p):
         for p, m in row.items():
             if m == name:
                 dt = d.strftime("%Y%m%d")
-                ics.append("BEGIN:VEVENT")
-                ics.append("DTSTART;VALUE=DATE:" + dt)
-                ics.append("SUMMARY:Garde " + str(p))
-                ics.append("END:VEVENT")
+                ics.append("BEGIN:VEVENT\nDTSTART;VALUE=DATE:" + dt)
+                ics.append("SUMMARY:Garde " + str(p) + "\nEND:VEVENT")
     ics.append("END:VCALENDAR")
     return "\n".join(ics)
 
-# --- INTERFACE ---
+# --- APP ---
 if 'u' not in st.session_state:
     st.title("🏥 Connexion")
-    u_df = gd(DB)
-    if u_df.empty:
+    if not os.path.exists(DB):
         sd(pd.DataFrame({"Medecin":list(MDS.keys()),"MDP":["Doudoudragon"]*13}), DB)
+    u_df = gd(DB)
     u_s = st.selectbox("Nom", list(MDS.keys()))
     pw = st.text_input("Code", type="password")
-    if st.button("OK"):
+    if st.button("Valider"):
         if pw == str(u_df.loc[u_df["Medecin"]==u_s, "MDP"].values[0]):
             st.session_state.u = u_s
             st.rerun()
+        else: st.error("Code erroné")
 else:
-    mn = ["📅 OFF / Agenda", "🚀 Go", "🔐 Code", "Sortie"]
-    if st.session_state.u != "Christophe Angelo": mn.remove("🚀 Go")
-    sel = st.sidebar.radio("Nav", mn)
+    st.sidebar.title("Menu")
+    m_list = ["📅 OFF / Agenda", "🚀 Générateur", "🔐 Code", "Sortie"]
+    if st.session_state.u != "Christophe Angelo": m_list.remove("🚀 Générateur")
+    sel = st.sidebar.radio("Aller à", m_list)
 
     if sel == "📅 OFF / Agenda":
+        st.header("Mes Indisponibilités")
         if os.path.exists("last.csv"):
             df_full = pd.read_csv("last.csv", index_col=0)
             df_full.index = pd.to_datetime(df_full.index)
-            st.download_button("Télécharger mon .ics", create_ics(st.session_state.u, df_full), st.session_state.u + ".ics")
+            st.download_button("📥 Télécharger mon .ics", create_ics(st.session_state.u, df_full), st.session_state.u + ".ics")
         
         mo = st.selectbox("Mois", [4,5,6,7,8], format_func=lambda x: calendar.month_name[x])
         df_o = gd(OF)
@@ -111,16 +111,15 @@ else:
             cols = st.columns(7)
             for i, j in enumerate(s):
                 if j != 0:
-                    # Remplacement f-string par concaténation simple
                     ds = "2026-" + str(mo).zfill(2) + "-" + str(j).zfill(2)
-                    sign = " ✅"
-                    if ds in c_o: sign = " ❌"
-                    t = str(j) + sign
+                    t = str(j) + (" ❌" if ds in c_o else " ✅")
                     if cols[i].button(t, key=ds, use_container_width=True):
                         if ds in c_o: df_o = df_o[~((df_o["Medecin"]==st.session_state.u)&(df_o["Date_OFF"]==ds))]
                         else: df_o = pd.concat([df_o, pd.DataFrame([{"Medecin":st.session_state.u,"Date_OFF":ds}])])
                         sd(df_o, OF); st.rerun()
 
-    elif sel == "🚀 Go":
-        if st.button("Générer"):
-            vo = gd(OF).groupby("Medecin")["Date_OFF"].apply(list).to_dict()
+    elif sel == "🚀 Générateur":
+        st.header("Génération du Planning Global")
+        if st.button("Lancer la création du planning"):
+            with st.spinner("Calcul en cours..."):
+                vo = gd
