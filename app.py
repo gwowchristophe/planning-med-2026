@@ -26,7 +26,7 @@ def get_gsheet():
         creds = Credentials.from_service_account_info(creds_dict, scopes=scopes)
         return gspread.authorize(creds).open_by_url(st.secrets["spreadsheet"])
     except Exception as e:
-        st.error(f"Erreur de connexion Google Sheets : {e}")
+        st.error(f"Erreur de connexion Google : {e}")
         return None
 
 def read_sheet(name):
@@ -44,4 +44,36 @@ if 'u' not in st.session_state:
     st.title("🏥 Planning Mons/Warquignies 2026")
     df_u = read_sheet("Users")
     if not df_u.empty:
-        u_s = st.selectbox("Sélectionnez votre nom
+        # Correction de la ligne 47 qui causait l'erreur
+        u_s = st.selectbox("Sélectionnez votre nom", df_u["Medecin"].tolist())
+        pw = st.text_input("Mot de passe", type="password")
+        if st.button("Connexion"):
+            db_pw = str(df_u.loc[df_u["Medecin"] == u_s, "MDP"].values[0])
+            if pw == db_pw:
+                st.session_state.u = u_s
+                st.rerun()
+            else: st.error("Mot de passe incorrect")
+    else: st.warning("Vérifiez l'onglet 'Users' sur Google Sheets.")
+
+# --- 3. ESPACE CONNECTÉ ---
+else:
+    st.sidebar.success(f"Dr. {st.session_state.u}")
+    menu = ["📅 Mes Désiderata", "📅 Planning Global", "🚀 Admin", "Déconnexion"]
+    if st.session_state.u != "Christophe Angelo": 
+        menu.remove("🚀 Admin")
+    choix = st.sidebar.radio("Menu", menu)
+
+    if choix == "Déconnexion":
+        del st.session_state.u
+        st.rerun()
+
+    # --- ONGLET : DÉSIDERATA (OFF) ---
+    elif choix == "📅 Mes Désiderata":
+        st.header("Vos absences (OFF)")
+        m = st.selectbox("Mois", [4,5,6,7,8], format_func=lambda x: calendar.month_name[x])
+        df_d = read_sheet("Desiderata")
+        jours_off = set(df_d[df_d["Medecin"] == st.session_state.u]["Date_OFF"].tolist()) if not df_d.empty else set()
+        
+        cal = calendar.monthcalendar(2026, m)
+        cols_h = st.columns(7)
+        for i,
