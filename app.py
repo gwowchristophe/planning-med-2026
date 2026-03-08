@@ -144,13 +144,13 @@ else:
                             # Si c'est un lundi, on bloque une personne pour 5 jours
 
                             if date_c.weekday() == 0:  # Si c'est Lundi
-                        candidats_jk = [m for m in meds if m['Medecin'] not in ['Daryush', 'Christian', 'Elisa', 'Raouf']]
+                            candidats_jk = [m for m in meds if m['Medecin'] not in ['Daryush', 'Christian', 'Elisa', 'Raouf']]
                         
-                        # Filtrage par dispo (on vérifie Lun, Mar, Mer, Ven)
-                        dispos_jk = []
-                        jours_jk = [0, 1, 2, 4] # Index des jours : Lun=0, Mar=1, Mer=2, Ven=4
-                        # --- LOGIQUE KENNEDY (Lun, Mar, Mer, Ven - PAS DE JEUDI) ---
-                        for m in candidats_jk:
+                            # Filtrage par dispo (on vérifie Lun, Mar, Mer, Ven)
+                            dispos_jk = []
+                            jours_jk = [0, 1, 2, 4] # Index des jours : Lun=0, Mar=1, Mer=2, Ven=4
+                            # --- LOGIQUE KENNEDY (Lun, Mar, Mer, Ven - PAS DE JEUDI) ---
+                            for m in candidats_jk:
                             # On vérifie que le médecin n'est pas "OFF" sur ces 4 jours précis
                             semaine_ok = all(f"{m['Medecin']}_{ (date_c + timedelta(days=d)).strftime('%Y-%m-%d') }" not in absences for d in jours_jk)
                             if semaine_ok: dispos_jk.append(m)
