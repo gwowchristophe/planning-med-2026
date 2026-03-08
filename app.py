@@ -1,72 +1,67 @@
 import streamlit as st
 import pandas as pd
-from datetime import date, timedelta
 import os
+from datetime import date
 
-# --- CONFIGURATION DE L'INTERFACE ---
-st.set_page_config(page_title="Planning Médical Kennedy-Warquignies", layout="centered")
+# --- CONFIGURATION ---
+st.set_page_config(page_title="Planning Dragon", layout="centered")
+DB_FILE = "users_db.csv"
+OFF_FILE = "desiderata_db.csv"
 
-# --- INITIALISATION DE LA BASE DE DONNÉES LOCALE ---
-DATA_FILE = "desiderata_db.csv"
-if not os.path.exists(DATA_FILE):
-    df_init = pd.DataFrame(columns=["Medecin", "Date_OFF", "Type"])
-    df_init.to_csv(DATA_FILE, index=False)
+# Initialisation de la base de données utilisateurs si elle n'existe pas
+if not os.path.exists(DB_FILE):
+    # Création de la liste initiale avec le MDP par défaut
+    meds = ["Alex", "Christophe", "Julie", "Camie", "Martin", "Simon", "Gauthier", "Alfredo", "Raouf", "Elisa", "Christian", "Daryush"]
+    df_users = pd.DataFrame({"Medecin": meds, "MDP": ["Doudoudragon"] * len(meds)})
+    df_users.to_csv(DB_FILE, index=False)
 
-# --- GESTION DE LA CONNEXION ---
+def get_users():
+    return pd.read_csv(DB_FILE)
+
+def save_users(df):
+    df.to_csv(DB_FILE, index=False)
+
+# --- LOGIQUE DE CONNEXION ---
 if 'user' not in st.session_state:
-    st.title("🏥 Connexion Planning")
-    medecins = ["Alex", "Camie", "Christophe", "Julie", "Martin", "Simon", "Gauthier", "Alfredo", "Raouf", "Elisa", "Christian", "Daryush"]
-    user = st.selectbox("Sélectionnez votre nom", medecins)
-    password = st.text_input("Mot de passe", type="password", help="Par défaut: med123")
+    st.title("🏥 Planning Médical")
+    st.info("Mot de passe initial : Doudoudragon")
+    
+    users_df = get_users()
+    user_select = st.selectbox("Sélectionnez votre nom", users_df["Medecin"].tolist())
+    pwd_input = st.text_input("Mot de passe", type="password")
     
     if st.button("Se connecter"):
-        if password == "med123": # Mot de passe simple pour l'exemple
-            st.session_state.user = user
+        correct_pwd = users_df.loc[users_df["Medecin"] == user_select, "MDP"].values[0]
+        if pwd_input == correct_pwd:
+            st.session_state.user = user_select
             st.rerun()
         else:
             st.error("Mot de passe incorrect.")
 else:
-    # --- INTERFACE UTILISATEUR (SMARTPHONE) ---
-    st.sidebar.title(f"👨‍⚕️ {st.session_state.user}")
-    menu = st.sidebar.radio("Navigation", ["Encoder mes OFF", "Voir le planning final"])
+    # --- INTERFACE UNE FOIS CONNECTÉ ---
+    st.sidebar.title(f"Dr {st.session_state.user}")
+    menu = st.sidebar.radio("Menu", ["Encoder mes OFF", "Changer mon mot de passe", "Déconnexion"])
 
     if menu == "Encoder mes OFF":
         st.header("📅 Vos Desiderata")
-        st.write("Sélectionnez les jours où vous ne pouvez PAS travailler.")
-        
-        # Calendrier multi-sélection
-        dates_selectionnees = st.date_input(
-            "Cliquer sur les jours d'absence :",
-            value=[],
-            min_value=date(2026, 4, 1),
-            max_value=date(2026, 8, 31)
-        )
-        
-        motif = st.selectbox("Motif", ["Congé", "Formation/DIU", "Repos Contractuel"])
-
+        dates = st.date_input("Cliquer sur vos jours d'absence :", value=[], min_value=date(2026, 4, 1), max_value=date(2026, 8, 31))
         if st.button("Enregistrer mes dates"):
-            # Sauvegarde dans le fichier CSV
-            current_db = pd.read_csv(DATA_FILE)
-            # Supprimer les anciennes entrées pour ce médecin pour mettre à jour
-            current_db = current_db[current_db['Medecin'] != st.session_state.user]
-            
-            new_entries = pd.DataFrame({
-                "Medecin": [st.session_state.user] * len(dates_selectionnees),
-                "Date_OFF": [d.strftime("%Y-%m-%d") for d in dates_selectionnees],
-                "Type": [motif] * len(dates_selectionnees)
-            })
-            
-            updated_db = pd.concat([current_db, new_entries])
-            updated_db.to_csv(DATA_FILE, index=False)
-            st.success("✅ Vos dates ont été enregistrées avec succès !")
+            st.success("Dates enregistrées ! (Simulé)")
 
-    elif menu == "Voir le planning final":
-        st.header("📋 Planning Généré")
-        if st.button("🚀 Calculer/Actualiser l'horaire"):
-            st.info("L'algorithme analyse les règles : V+D, Repos 48h, et 3ème WE...")
-            # Ici on simule l'affichage du résultat
-            st.warning("Fonctionnalité en cours de liaison avec l'algorithme complet.")
+    elif menu == "Changer mon mot de passe":
+        st.header("🔐 Sécurisez votre compte")
+        new_pwd = st.text_input("Nouveau mot de passe", type="password")
+        conf_pwd = st.text_input("Confirmez le mot de passe", type="password")
+        
+        if st.button("Mettre à jour le MDP"):
+            if new_pwd == conf_pwd and len(new_pwd) > 3:
+                users_df = get_users()
+                users_df.loc[users_df["Medecin"] == st.session_state.user, "MDP"] = new_pwd
+                save_users(users_df)
+                st.success("Mot de passe modifié avec succès !")
+            else:
+                st.error("Les mots de passe ne correspondent pas ou sont trop courts.")
 
-    if st.sidebar.button("Déconnexion"):
+    if menu == "Déconnexion":
         del st.session_state.user
         st.rerun()
