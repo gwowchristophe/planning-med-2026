@@ -128,7 +128,7 @@ else:
         t1, t2 = st.tabs(["📊 Bilan d'Équité", "⚙️ Générateur 5 Mois"])
 
         with t1:
-            st.subheader("Bilan de Performance et Équité (Avril - Août 2026)")
+            st.subheader("Bilan Réel (Équilibre Heures et Jours Rouges)")
             df_u = read_sheet("Users")
             df_p = read_sheet("Planning")
             
@@ -143,36 +143,31 @@ else:
                     m_p = df_p[df_p['Medecin'] == nom]
                     
                     hrs_tot = m_p['Heures'].sum()
-                    # Moyenne h/sem : (Heures / 22 semaines) / ETP
-                    moy_sem = (hrs_tot / 22) / etp if etp > 0 else 0
                     
-                    nuits = len(m_p[m_p['Poste'].isin(["GM", "GW"])])
-                    
-                    # Week-ends et Fériés
-                    def is_red(d_str):
-                        d = pd.to_datetime(d_str)
-                        return d.weekday() >= 5 or d_str in feries
-                    
-                    we_feries = m_p[m_p['Date'].apply(is_red)].shape[0]
-                    nb_jk = len(m_p[m_p['Poste'] == "JK (Kennedy)"]) // 4 # Nb de blocs de 4j
+                    # Décompte WE ET Fériés réels
+                    jours_rouges = 0
+                    for d_str in m_p['Date']:
+                        d_obj = pd.to_datetime(d_str)
+                        if d_obj.weekday() >= 5 or d_str in feries:
+                            jours_rouges += 1
                     
                     bilan.append({
                         "Médecin": nom,
                         "ETP": etp,
-                        "Heures Totales": hrs_tot,
-                        "Moyenne h/Sem": round(moy_sem, 1),
-                        "Nb Gardes (Nuits)": nuits,
-                        "WE/Fériés": we_feries,
-                        "Semaines Kennedy": nb_jk
+                        "Heures Totales": int(hrs_tot),
+                        "Ratio H/ETP": round(hrs_tot / etp, 1),
+                        "Nb Gardes (Nuits)": len(m_p[m_p['Poste'].isin(["GM", "GW"])]),
+                        "Jours Rouges (WE+Fériés)": jours_rouges,
+                        "Ratio Rouges/ETP": round(jours_rouges / etp, 1),
+                        "Blocs JK": len(m_p[m_p['Poste'] == "JK (Kennedy)"]) // 4
                     })
                 
-                st.table(pd.DataFrame(bilan).sort_values("Moyenne h/Sem", ascending=False))
+                st.table(pd.DataFrame(bilan).sort_values("Ratio H/ETP"))
 
         with t2:
-            st.subheader("Générateur Haute Précision")
-            if st.button("🚀 Lancer la génération (Respect des 6 critères)"):
-                with st.spinner("Calcul des contraintes de fatigue et d'équité..."):
-                    # 1. SETUP
+            st.subheader("Générateur : Équilibrage WE/Fériés inclus")
+            if st.button("🚀 Lancer la génération"):
+                with st.spinner("Analyse des contraintes et des jours fériés..."):
                     df_u = read_sheet("Users")
                     df_d = read_sheet("Desiderata")
                     df_r = read_sheet("Regles")
@@ -184,100 +179,90 @@ else:
                     feries = ["2026-04-06", "2026-05-01", "2026-05-14", "2026-05-25", "2026-07-21", "2026-08-15"]
                     
                     planning_final = []
-                    dettes = {m['Medecin']: 0.0 for m in meds}
-                    we_counts = {m['Medecin']: 0 for m in meds}
-                    jk_hist = [] # Liste d'attente Kennedy (tournante de 8)
+                    heures_reelles = {m['Medecin']: 0.0 for m in meds}
+                    rouges_reels = {m['Medecin']: 0 for m in meds}
+                    jk_hist = []
 
-                    # 2. FONCTIONS DE CONTRÔLE
-                    def get_score(nom):
-                        # Score d'équité multidimensionnel
-                        etp = next(m['ETP'] for m in meds if m['Medecin'] == nom)
-                        return (dettes[nom] / etp) + (we_counts[nom] * 12) # Malus WE important (12h équiv.)
+                    def select_best_candidate(candidats):
+                        """Équilibre selon deux axes : Volume horaire et Pénibilité (Jours Rouges)"""
+                        def calcul_score(m):
+                            nom = m['Medecin']
+                            etp = m['ETP']
+                            # On cherche le plus petit cumul de ratios
+                            return (heures_reelles[nom] / etp) + (rouges_reels[nom] / etp)
+                        return min(candidats, key=calcul_score)
 
                     def check_fatigue(nom, date_obj):
-                        # Règle des 8 jours glissants (Max 2 postes, sinon 48h repos)
+                        # 8 jours glissants : Max 2 postes
                         start_f = date_obj - timedelta(days=7)
                         recent = [p for p in planning_final if p[2] == nom and start_f <= datetime.strptime(p[0], "%Y-%m-%d") < date_obj]
                         if len(recent) >= 2:
-                            # Si 2 postes faits, check si le dernier poste date de plus de 48h
-                            dernier_poste = datetime.strptime(recent[-1][0], "%Y-%m-%d")
-                            if (date_obj - dernier_poste).days < 2: return False
-                        # Repos de sécurité J+1
+                            dernier_p = datetime.strptime(recent[-1][0], "%Y-%m-%d")
+                            if (date_obj - dernier_p).days < 2: return False
+                        # Repos de sécurité J+1 (Garde ou Journée)
                         hier = (date_obj - timedelta(days=1)).strftime("%Y-%m-%d")
                         if any(p[0] == hier and p[2] == nom for p in planning_final): return False
-                        # Repos J-1 si OFF demain (pour la garde de nuit)
-                        demain = (date_obj + timedelta(days=1)).strftime("%Y-%m-%d")
-                        if f"{nom}_{demain}" in absences: return False
                         return True
 
-                    # 3. BOUCLE
                     for mois in range(4, 9):
                         jours = calendar.monthrange(2026, mois)[1]
                         for j in range(1, jours + 1):
                             date_c = datetime(2026, mois, j)
                             d_str = date_c.strftime("%Y-%m-%d")
-                            is_we = date_c.weekday() >= 5
-                            is_ferie = d_str in feries
-
-                            # --- A. KENNEDY (Lundi) ---
+                            # DEFINITION JOUR ROUGE (WE ou Férié)
+                            is_rouge = date_c.weekday() >= 5 or d_str in feries
+                            
+                            # --- A. KENNEDY ---
                             if date_c.weekday() == 0:
                                 j_jk = [0, 1, 2, 4]
                                 bloc_dates = [(date_c + timedelta(days=d)).strftime("%Y-%m-%d") for d in j_jk]
                                 if not any(d in feries for d in bloc_dates):
-                                    c_jk = [m for m in meds if regles.get(m['Medecin'], {}).get('Autorise_Kennedy') == 'OUI' 
-                                           and m['Medecin'] not in jk_hist[:7]] # Tournante
-                                    dispos_jk = [m for m in c_jk if all(f"{m['Medecin']}_{d}" not in absences for d in bloc_dates)
-                                                and all(check_fatigue(m['Medecin'], date_c + timedelta(days=d)) for d in j_jk)]
-                                    if dispos_jk:
-                                        elu = min(dispos_jk, key=lambda x: get_score(x['Medecin']))
+                                    c_jk = [m for m in meds if regles.get(m['Medecin'], {}).get('Autorise_Kennedy') == 'OUI' and m['Medecin'] not in jk_hist[:7]]
+                                    dispos = [m for m in c_jk if all(f"{m['Medecin']}_{d}" not in absences for d in bloc_dates) and all(check_fatigue(m['Medecin'], date_c + timedelta(days=d)) for d in j_jk)]
+                                    if dispos:
+                                        elu = select_best_candidate(dispos)
                                         for d_jk in bloc_dates:
                                             planning_final.append([d_jk, "JK (Kennedy)", elu['Medecin'], 8])
-                                            dettes[elu['Medecin']] += 8
+                                            heures_reelles[elu['Medecin']] += 8
                                         jk_hist.append(elu['Medecin'])
 
-                            # --- B. CAS DARYUSH (JM Fixe) ---
-                            # Alternance Mar-Mer-Jeu / Mer-Jeu-Ven
-                            is_semaine_A = (date_c.isocalendar()[1] % 2 == 0)
-                            jours_daryush = [1,2,3] if is_semaine_A else [2,3,4]
-                            if date_c.weekday() in jours_daryush:
+                            # --- B. DARYUSH (Planning immuable) ---
+                            is_sem_A = (date_c.isocalendar()[1] % 2 == 0)
+                            j_dar = [1,2,3] if is_sem_A else [2,3,4]
+                            if date_c.weekday() in j_dar and not is_rouge: # Daryush ne travaille pas les jours fériés
                                 if f"Daryush_{d_str}" not in absences:
                                     planning_final.append([d_str, "JM", "Daryush", 8])
-                                    dettes["Daryush"] += 8
+                                    heures_reelles["Daryush"] += 8
 
-                            # --- C. JM (Pour les autres jours/médecins) ---
-                            if not is_we and not is_ferie:
+                            # --- C. JM (Uniquement si pas rouge) ---
+                            if not is_rouge:
                                 if not any(p[0] == d_str and p[1] == "JM" for p in planning_final):
-                                    c_jm = [m for m in meds if m['Medecin'] != "Daryush" 
-                                           and regles.get(m['Medecin'], {}).get('Autorise_Kennedy') == 'OUI' # Filtre JM
-                                           and not any(p[0] == d_str and p[2] == m['Medecin'] for p in planning_final)
-                                           and f"{m['Medecin']}_{d_str}" not in absences and check_fatigue(m['Medecin'], date_c)]
+                                    c_jm = [m for m in meds if m['Medecin'] != "Daryush" and regles.get(m['Medecin'], {}).get('Autorise_Kennedy') == 'OUI' and not any(p[0] == d_str and p[2] == m['Medecin'] for p in planning_final) and f"{m['Medecin']}_{d_str}" not in absences and check_fatigue(m['Medecin'], date_c)]
                                     if c_jm:
-                                        elu = min(c_jm, key=lambda x: get_score(x['Medecin']))
+                                        elu = select_best_candidate(c_jm)
                                         planning_final.append([d_str, "JM", elu['Medecin'], 8])
-                                        dettes[elu['Medecin']] += 8
+                                        heures_reelles[elu['Medecin']] += 8
 
-                            # --- D. GARDE (GM/GW) - Priorité Absolue ---
-                            p_type, h_p = ("GW", 24) if (is_we or is_ferie) else ("GM", 24)
+                            # --- D. GARDE (GM/GW) ---
+                            p_type, h_p = ("GW", 24) if is_rouge else ("GM", 24)
                             c_g = [m for m in meds if m['Medecin'] != "Daryush"]
-                            # Filtres spécifiques
-                            if is_we or is_ferie: c_g = [m for m in c_g if regles.get(m['Medecin'], {}).get('Autorise_Garde_WE') == 'OUI']
+                            if is_rouge: c_g = [m for m in c_g if regles.get(m['Medecin'], {}).get('Autorise_Garde_WE') == 'OUI']
                             else: c_g = [m for m in c_g if regles.get(m['Medecin'], {}).get('Autorise_Garde_Semaine') == 'OUI']
                             
-                            cands = [m for m in c_g if not any(p[0] == d_str and p[2] == m['Medecin'] for p in planning_final)
-                                    and f"{m['Medecin']}_{d_str}" not in absences and check_fatigue(m['Medecin'], date_c)]
-                            
+                            cands = [m for m in c_g if not any(p[0] == d_str and p[2] == m['Medecin'] for p in planning_final) and f"{m['Medecin']}_{d_str}" not in absences and check_fatigue(m['Medecin'], date_c)]
                             if cands:
-                                elu = min(cands, key=lambda x: get_score(x['Medecin']))
+                                elu = select_best_candidate(cands)
                                 planning_final.append([d_str, p_type, elu['Medecin'], h_p])
-                                dettes[elu['Medecin']] += h_p
-                                if is_we or is_ferie: we_counts[elu['Medecin']] += 1
+                                heures_reelles[elu['Medecin']] += h_p
+                                if is_rouge: rouges_reels[elu['Medecin']] += 1
                             else:
                                 planning_final.append([d_str, p_type, "⚠️ VIDE", 0])
 
-                    # 4. ENVOI
+                    # 3. ENREGISTREMENT
                     df_res = pd.DataFrame(planning_final, columns=["Date", "Poste", "Medecin", "Heures"])
                     ws = get_gsheet().worksheet("Planning")
                     ws.clear()
                     ws.append_row(["Date", "Poste", "Medecin", "Heures"])
                     ws.append_rows(df_res.values.tolist())
-                    st.success("Génération terminée avec respect strict des 6 critères.")
+                    st.success("Planning généré avec succès !")
+                    st.balloons()
