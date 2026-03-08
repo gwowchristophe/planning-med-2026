@@ -91,13 +91,37 @@ else:
                         st.rerun()
 
     elif choix == "📊 Planning Global":
-        st.header("Consulter le planning")
+        st.header("Planning Global 2026")
         df_p = read_sheet("Planning")
         if not df_p.empty:
             df_p['Date'] = pd.to_datetime(df_p['Date'])
             m_v = st.selectbox("Mois", [4,5,6,7,8], format_func=lambda x: calendar.month_name[x])
-            df_m = df_p[df_p['Date'].dt.month == m_v].sort_values("Date")
-            st.dataframe(df_m, use_container_width=True)
+            df_m = df_p[df_p['Date'].dt.month == m_v].copy()
+            
+            if not df_m.empty:
+                # Création du tableau croisé (Dates en lignes, Postes en colonnes)
+                df_pivot = df_m.pivot(index='Date', columns='Poste', values='Medecin').fillna("-")
+                
+                # Tri des colonnes pour la clarté
+                cols_target = ["JK (Kennedy)", "GM", "GW", "JM"]
+                df_pivot = df_pivot[[c for c in cols_target if c in df_pivot.columns]]
+                
+                # Jours fériés 2026 (Belgique)
+                feries = ["2026-04-06", "2026-05-01", "2026-05-14", "2026-05-25", "2026-07-21", "2026-08-15"]
+
+                def style_planning(row):
+                    d = row.name
+                    is_we = d.weekday() >= 5
+                    is_ferie = d.strftime('%Y-%m-%d') in feries
+                    if is_we or is_ferie:
+                        return ['background-color: #E0E0E0; color: black; font-weight: bold'] * len(row)
+                    return [''] * len(row)
+
+                st.dataframe(df_pivot.style.apply(style_planning, axis=1), use_container_width=True, height=800)
+            else:
+                st.info("Aucune donnée pour ce mois.")
+        else:
+            st.warning("Le planning est vide. Allez dans Admin > Générateur.")
 
     elif choix == "🚀 Admin":
         st.header("Console Administrateur")
@@ -108,8 +132,7 @@ else:
             df_u = read_sheet("Users")
             df_p = read_sheet("Planning")
             
-            # --- CORRECTION ROBUSTE ---
-            # Si le planning est vide, on crée un tableau vide avec la colonne Heures pour éviter le crash
+            # Sécurité : Si la colonne 'Heures' manque, on la crée à 0 pour éviter le plantage
             if df_p.empty or 'Heures' not in df_p.columns:
                 df_p = pd.DataFrame(columns=["Date", "Poste", "Medecin", "Heures"])
             
@@ -117,20 +140,14 @@ else:
                 bilan = []
                 for _, r in df_u.iterrows():
                     nom = r['Medecin']
-                    # Sécurité sur l'ETP
-                    try:
-                        etp = float(str(r['ETP']).replace(',','.')) if r['ETP'] else 1.0
-                    except:
-                        etp = 1.0
+                    try: etp = float(str(r['ETP']).replace(',','.')) if r['ETP'] else 1.0
+                    except: etp = 1.0
                     
                     m_p = df_p[df_p['Medecin'] == nom]
-                    # On force la conversion en nombre, si vide ou erreur -> 0
                     hrs = pd.to_numeric(m_p['Heures'], errors='coerce').sum()
                     
                     bilan.append({
-                        "Médecin": nom, 
-                        "ETP": etp, 
-                        "Heures": hrs,
+                        "Médecin": nom, "ETP": etp, "Heures": hrs,
                         "Dette (H/ETP)": round(hrs/etp, 1) if etp > 0 else 0,
                         "Nuits": len(m_p[m_p['Poste'].str.contains("G", na=False)]),
                         "WE": len(m_p[m_p['Poste'].str.contains("GW", na=False)])
