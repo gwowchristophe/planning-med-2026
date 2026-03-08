@@ -39,55 +39,80 @@ else:
     menu = st.sidebar.radio("Menu", ["📅 Mes Desiderata", "🔐 Changer MDP", "⚙️ Admin", "Logout"])
 
     if menu == "📅 Mes Desiderata":
-        st.header("Encoder vos indisponibilités")
+        st.header("Gestion de vos indisponibilités")
         
-        # Récupérer les dates déjà sauvées
         all_off = get_data(OFF_FILE)
         current_user_off = all_off[all_off["Medecin"] == st.session_state.user]["Date_OFF"].tolist()
         
-        st.subheader("1. Ajouter des dates")
-        st.info("Sélectionnez une date seule ou une période (Début et Fin).")
-        
-        # Calendrier mode 'range'
+        st.subheader("1. Sélectionner une date ou une période")
         selected_range = st.date_input(
-            "Sélectionnez vos dates :",
+            "Utilisez le calendrier :",
             value=None,
             min_value=date(2026, 4, 1),
             max_value=date(2026, 8, 31),
-            help="Cliquez une fois pour un jour seul, deux fois pour une période."
         )
 
-        if st.button("➕ Ajouter à ma liste"):
-            if selected_range:
-                # Si c'est une période (liste de 2 dates)
-                if isinstance(selected_range, list) or isinstance(selected_range, tuple):
-                    if len(selected_range) == 2:
-                        start, end = selected_range
-                        delta = end - start
-                        new_dates = [(start + timedelta(days=i)).strftime("%Y-%m-%d") for i in range(delta.days + 1)]
-                    else: # Une seule date sélectionnée dans le calendrier
-                        new_dates = [selected_range[0].strftime("%Y-%m-%d")]
-                else: # Date unique
-                    new_dates = [selected_range.strftime("%Y-%m-%d")]
+        # Transformation de la sélection en liste de dates
+        dates_to_process = []
+        if selected_range:
+            if isinstance(selected_range, list) or isinstance(selected_range, tuple):
+                if len(selected_range) == 2:
+                    start, end = selected_range
+                    delta = end - start
+                    dates_to_process = [(start + timedelta(days=i)).strftime("%Y-%m-%d") for i in range(delta.days + 1)]
+                elif len(selected_range) == 1:
+                    dates_to_process = [selected_range[0].strftime("%Y-%m-%d")]
+            else:
+                dates_to_process = [selected_range.strftime("%Y-%m-%d")]
 
-                # Ajouter sans doublons
-                new_rows = pd.DataFrame([{"Medecin": st.session_state.user, "Date_OFF": d} for d in new_dates if d not in current_user_off])
-                all_off = pd.concat([all_off, new_rows], ignore_index=True)
-                save_data(all_off, OFF_FILE)
-                st.success(f"{len(new_rows)} jour(s) ajouté(s) !")
-                st.rerun()
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            if st.button("➕ AJOUTER", use_container_width=True):
+                if dates_to_process:
+                    new_rows = pd.DataFrame([{"Medecin": st.session_state.user, "Date_OFF": d} for d in dates_to_process if d not in current_user_off])
+                    all_off = pd.concat([all_off, new_rows], ignore_index=True)
+                    save_data(all_off, OFF_FILE)
+                    st.success(f"{len(new_rows)} jour(s) ajouté(s)")
+                    st.rerun()
+
+        with col2:
+            if st.button("➖ RETIRER", use_container_width=True):
+                if dates_to_process:
+                    # On garde uniquement les dates qui NE sont PAS dans la sélection actuelle
+                    all_off = all_off[~((all_off["Medecin"] == st.session_state.user) & (all_off["Date_OFF"].isin(dates_to_process)))]
+                    save_data(all_off, OFF_FILE)
+                    st.warning("Sélection retirée")
+                    st.rerun()
 
         st.divider()
-        st.subheader("2. Récapitulatif de vos jours OFF")
+        st.subheader("2. Votre récapitulatif")
         if current_user_off:
             current_user_off.sort()
-            st.write(f"Vous avez **{len(current_user_off)}** jours d'indisponibilité au total.")
+            st.info(f"Total : {len(current_user_off)} jours OFF enregistrés.")
+            # Affichage en colonnes pour plus de clarté
             st.write(", ".join(current_user_off))
             
-            if st.button("🗑️ Tout effacer et recommencer"):
+            if st.button("🗑️ TOUT SUPPRIMER (RAZ)", type="secondary"):
                 all_off = all_off[all_off["Medecin"] != st.session_state.user]
                 save_data(all_off, OFF_FILE)
-                st.warning("Toutes vos dates ont été supprimées.")
                 st.rerun()
         else:
-            
+            st.write("Aucune date enregistrée.")
+
+    # ... (Le reste du code Admin/MDP reste identique)
+    elif menu == "⚙️ Admin":
+        st.header("Zone Administrateur")
+        off_data = get_data(OFF_FILE)
+        st.dataframe(off_data)
+        st.download_button("📥 Télécharger CSV", off_data.to_csv(index=False), "desiderata.csv")
+    elif menu == "🔐 Changer MDP":
+        new_p = st.text_input("Nouveau MDP", type="password")
+        if st.button("Valider"):
+            u_df = get_data(DB_FILE)
+            u_df.loc[u_df["Medecin"] == st.session_state.user, "MDP"] = new_p
+            save_data(u_df, DB_FILE)
+            st.success("MDP changé !")
+    if menu == "Logout":
+        del st.session_state.user
+        st.rerun()
