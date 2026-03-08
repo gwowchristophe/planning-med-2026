@@ -26,9 +26,9 @@ MEDS = {
     "Simon Van Migem": {"etp": 0.8, "jk": 1, "trio": 0}
 }
 
+# Fonctions utilitaires
 def gd(f):
-    if os.path.exists(f): return pd.read_csv(f)
-    return pd.DataFrame()
+    return pd.read_csv(f) if os.path.exists(f) else pd.DataFrame()
 
 def sd(df, f):
     df.to_csv(f, index=False)
@@ -38,70 +38,80 @@ def check_rules(n, d, p, pl, vo):
     if ds in vo.get(n, []): return False
     v = d - timedelta(days=1)
     if v in pl and n in pl[v].values(): return False
-    if n == "Daryush Valadi":
-        if d.weekday() == 0 or p != "JM": return False
+    if n == "Daryush Valadi" and (d.weekday() == 0 or p != "JM"): return False
     if MEDS[n]["trio"] and p != "GW": return False
     if n == "PF Laterre" and p == "JK": return False
     if p == "JK" and not MEDS[n]["jk"]: return False
     return True
 
-def get_ratio(name, stt):
-    num = stt[name]
-    den = MEDS[name]["etp"]
-    return num / den
-
-def generer_planning_global(vo):
-    pl, stt = {}, {m: 0 for m in MEDS.keys()}
-    sq = {m: {"S": 0, "D": 0, "F": 0} for m in MEDS.keys()}
-    dates = []
-    for m_idx in range(4, 9):
-        last = calendar.monthrange(2026, m_idx)[1]
-        for j in range(1, last + 1):
-            dates.append(date(2026, m_idx, j))
-    
-    for d in dates:
-        jp = {}
-        # Tri décomposé pour éviter la coupure de ligne
-        ml = list(MEDS.keys())
-        ml.sort(key=lambda x: get_ratio(x, stt))
-        
-        f, s, dim = (d in BE_H), (d.weekday()==5), (d.weekday()==6)
-        is_we = f or s or dim
-        
-        for p in ["GW", "GM", "JK", "JM"]:
-            if is_we and p in ["JK", "JM"]: continue
-            if not is_we and p == "JK" and d.weekday() == 3: continue
-            try:
-                c = next(m for m in ml if m not in jp.values() and check_rules(m, d, p, pl, vo))
-                jp[p] = c
-                stt[c] += VALS[p]
-                if s: sq[c]["S"] += 1
-                if dim: sq[c]["D"] += 1
-                if f: sq[c]["F"] += 1
-            except StopIteration: return None, None, None
-        pl[d] = jp
-    return pl, stt, sq
-
-# --- INTERFACE ---
+# --- INTERFACE DE CONNEXION ---
 if 'user' not in st.session_state:
-    st.title("🏥 Planning 2026")
-    u_df = gd(DB_F)
-    if u_df.empty:
+    st.title("🏥 Connexion Planning")
+    if not os.path.exists(DB_F):
         df_init = pd.DataFrame({"Medecin": list(MEDS.keys()), "MDP": ["Doudoudragon"]*13})
         sd(df_init, DB_F)
-        st.rerun()
+    
+    u_df = gd(DB_F)
     u_sel = st.selectbox("Nom", list(MEDS.keys()))
     pw = st.text_input("Code", type="password")
-    if st.button("OK"):
-        v_pw = u_df.loc[u_df["Medecin"]==u_sel, "MDP"].values[0]
+    if st.button("Se connecter"):
+        v_pw = str(u_df.loc[u_df["Medecin"]==u_sel, "MDP"].values[0])
         if pw == v_pw:
             st.session_state.user = u_sel
             st.rerun()
-        else: st.error("Erreur")
+        else: st.error("Code incorrect")
+
+# --- CONTENU PRINCIPAL ---
 else:
-    st.sidebar.title(st.session_state.user)
-    m = ["📅 OFF", "🔐 Code", "Sortie"]
+    # Menu Sidebar
+    m_list = ["📅 OFF", "🔐 Code", "Sortie"]
     if st.session_state.user == "Christophe Angelo":
-        m.insert(1, "🚀 Générateur")
-    sel = st.sidebar.radio("Menu", m)
-    nms = {4:"Avril", 5:"Mai", 6:"Juin", 7:"Juillet", 8:"Août"}
+        m_list.insert(1, "🚀 Générateur")
+    
+    sel = st.sidebar.radio("Menu", m_list)
+    st.sidebar.write(f"Connecté : **{st.session_state.user}**")
+
+    # 1. GESTION DES OFF
+    if sel == "📅 OFF":
+        st.header("Mes indisponibilités")
+        nms = {4:"Avril", 5:"Mai", 6:"Juin", 7:"Juillet", 8:"Août"}
+        mo = st.selectbox("Mois", [4,5,6,7,8], format_func=lambda x: nms[x])
+        
+        df_off = gd(OFF_F)
+        user_off = set(df_off[df_off["Medecin"]==st.session_state.user]["Date_OFF"].tolist())
+        
+        cl = calendar.monthcalendar(2026, mo)
+        for s in cl:
+            cols = st.columns(7)
+            for i, j in enumerate(s):
+                if j != 0:
+                    ds = f"2026-{mo:02d}-{j:02d}"
+                    txt = f"{j} {'❌' if ds in user_off else '✅'}"
+                    if cols[i].button(txt, key=ds):
+                        if ds in user_off:
+                            df_off = df_off[~((df_off["Medecin"]==st.session_state.user)&(df_off["Date_OFF"]==ds))]
+                        else:
+                            new_row = pd.DataFrame([{"Medecin":st.session_state.user, "Date_OFF":ds}])
+                            df_off = pd.concat([df_off, new_row])
+                        sd(df_off, OFF_F)
+                        st.rerun()
+
+    # 2. GÉNÉRATEUR (Uniquement pour Christophe)
+    elif sel == "🚀 Générateur":
+        st.header("Générateur Global (5 mois)")
+        if st.button("Lancer la simulation"):
+            vo = gd(OFF_F).groupby("Medecin")["Date_OFF"].apply(list).to_dict()
+            pl, stt = {}, {m: 0 for m in MEDS.keys()}
+            sq = {m: {"S": 0, "D": 0, "F": 0} for m in MEDS.keys()}
+            
+            # Création dates
+            all_days = []
+            for m_idx in range(4, 9):
+                last = calendar.monthrange(2026, m_idx)[1]
+                for j in range(1, last + 1): all_days.append(date(2026, m_idx, j))
+            
+            ok = True
+            for d in all_days:
+                jp = {}
+                ml = list(MEDS.keys())
+                ml.sort(key
