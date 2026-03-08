@@ -112,7 +112,7 @@ else:
                 ).reset_index()
 
                 # S'assurer que toutes les colonnes demandées existent, même si vides
-                for col in ["JM", "GM", "GW", "JK (Kennedy)"]:
+                for col in ["JM", "GM", "GW", "JK"]:
                     if col not in df_pivot.columns:
                         df_pivot[col] = ""
 
