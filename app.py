@@ -57,8 +57,25 @@ def est_valide(nom, date_obj, poste, planning, v_off):
 
 # --- INTERFACE ---
 if 'user' not in st.session_state:
-    st.title("🏥 Planning Médical 2026")
-    user_sel = st.selectbox("Médecin", list(MEDS.keys()))
+    st.title("🏥 Système Expert Planning 2026")
+    u_df = get_data(DB_FILE)
+    
+    # Sélection du nom
+    user_sel = st.selectbox("Sélectionnez votre nom", list(MEDS.keys()))
+    
+    # Saisie du mot de passe
+    pwd_in = st.text_input("Mot de passe", type="password")
+    
     if st.button("Se connecter"):
-        st.session_state.user = user_sel
-        st.rerun()
+        # Vérification dans la base de données
+        if not u_df.empty:
+            correct_pwd = u_df.loc[u_df["Medecin"] == user_sel, "MDP"].values[0]
+            if pwd_in == correct_pwd:
+                st.session_state.user = user_sel
+                st.rerun()
+            else:
+                st.error("Mot de passe incorrect.")
+        else:
+            st.error("Base de données introuvable. Veuillez relancer l'application.")
+else:
+    # --- LE RESTE DU CODE (SIDEBAR ET MENUS) RESTE INCHANGÉ ---
