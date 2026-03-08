@@ -82,7 +82,6 @@ if 'user' not in st.session_state:
 else:
     # --- ESPACE CONNECTÉ ---
     st.sidebar.title(f"Dr {st.session_state.user}")
-    
     ADMIN_USER = "Christophe Angelo"
     options_menu = ["📅 Mes OFF", "🔐 Sécurité", "Déconnexion"]
     
@@ -95,72 +94,4 @@ else:
     if mode == "📅 Mes OFF":
         st.header("Gestion de vos indisponibilités")
         annee = 2026
-        m_sel = st.selectbox("Choisir le mois :", [4, 5, 6, 7, 8], format_func=lambda x: calendar.month_name[x])
-        
-        all_off = get_data(OFF_FILE)
-        curr_off = set(all_off[all_off["Medecin"] == st.session_state.user]["Date_OFF"].astype(str).tolist())
-        
-        cal = calendar.monthcalendar(annee, m_sel)
-        cols_h = st.columns(7)
-        for i, jn in enumerate(["Lun", "Mar", "Mer", "Jeu", "Ven", "Sam", "Dim"]):
-            cols_h[i].write(f"**{jn}**")
-        
-        for sem in cal:
-            cols = st.columns(7)
-            for i, jour in enumerate(sem):
-                if jour != 0:
-                    d_str = f"{annee}-{m_sel:02d}-{jour:02d}"
-                    is_off = d_str in curr_off
-                    label = f"{jour}\n{'❌ OFF' if is_off else '✅ OK'}"
-                    if cols[i].button(label, key=d_str, use_container_width=True, type="secondary" if is_off else "primary"):
-                        if is_off:
-                            all_off = all_off[~((all_off["Medecin"] == st.session_state.user) & (all_off["Date_OFF"] == d_str))]
-                        else:
-                            all_off = pd.concat([all_off, pd.DataFrame([{"Medecin": st.session_state.user, "Date_OFF": d_str}])])
-                        save_data(all_off, OFF_FILE)
-                        st.rerun()
-
-    # --- MODE : GÉNÉRATEUR (ADMIN UNIQUEMENT) ---
-    elif mode == "🚀 Générateur":
-        st.header("Moteur de génération d'horaire")
-        mois_gen = st.slider("Mois à calculer", 4, 8)
-        
-        if st.button("Lancer la simulation du mois"):
-            off_data = get_data(OFF_FILE)
-            v_off = off_data.groupby("Medecin")["Date_OFF"].apply(list).to_dict()
-            
-            planning = {}
-            stats = {m: 0 for m in MEDS.keys()}
-            dates_mois = [date(2026, mois_gen, d) for d in range(1, calendar.monthrange(2026, mois_gen)[1] + 1)]
-            
-            possible = True
-            for d in dates_mois:
-                jour_plan = {}
-                list_meds = list(MEDS.keys())
-                random.shuffle(list_meds)
-                
-                for p in ["GW", "GM", "JK", "JM"]:
-                    if p == "JK" and d.weekday() in [3, 5, 6]: continue
-                    if p == "JM" and d.weekday() in [5, 6]: continue
-                    
-                    try:
-                        candidat = next(m for m in list_meds if m not in jour_plan.values() and est_valide(m, d, p, planning, v_off))
-                        jour_plan[p] = candidat
-                        stats[candidat] += VALEURS_HEURES[p]
-                    except StopIteration:
-                        possible = False; break
-                if not possible: break
-                planning[d] = jour_plan
-
-            if not possible:
-                st.error("❌ IMPOSSIBLE : Incompatibilité avec les critères")
-            else:
-                st.success(f"✅ Planning généré !")
-                col_a, col_b = st.columns([3, 1])
-                with col_a:
-                    st.dataframe(pd.DataFrame.from_dict(planning, orient='index'), use_container_width=True)
-                    ics_data = generate_ics(st.session_state.user, planning)
-                    st.download_button("📥 Télécharger mon calendrier (.ics)", ics_data, "mon_planning.ics", "text/calendar")
-                with col_b:
-                    st.subheader("⚖️ Équité")
-                    equite = [{"Nom": m, "Heures":
+        m_sel = st.selectbox("Choisir le mois :", [4, 5, 6, 7
