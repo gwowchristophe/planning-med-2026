@@ -80,8 +80,9 @@ else:
         if st.button("Lancer la simulation complète"):
             vo = gd(OFF_F).groupby("Medecin")["Date_OFF"].apply(list).to_dict()
             pl, stt = {}, {m: 0 for m in MEDS.keys()}
+            # Nouveaux compteurs pour l'équité qualitative
+            stats_qual = {m: {"Sam": 0, "Dim": 0, "Ferie": 0} for m in MEDS.keys()}
             
-            # Création de la liste de tous les jours du 01/04 au 31/08
             ds = []
             for m_idx in range(4, 9):
                 last_j = calendar.monthrange(2026, m_idx)[1]
@@ -91,58 +92,18 @@ else:
             ok = True
             for d in ds:
                 jp = {}
-                # Tri des médecins par ceux qui ont le MOINS d'heures par rapport à leur ETP (Priorité aux retardataires)
                 ml = sorted(list(MEDS.keys()), key=lambda x: stt[x] / MEDS[x]["etp"])
+                is_ferie = d in BE_HOLIDAYS
+                is_sam = d.weekday() == 5
+                is_dim = d.weekday() == 6
                 
                 for p in ["GW", "GM", "JK", "JM"]:
-                    is_off_day = (d.weekday() >= 5) or (d in BE_HOLIDAYS)
+                    is_off_day = (is_sam or is_dim or is_ferie)
                     if is_off_day and p in ["JK", "JM"]: continue
                     if not is_off_day and p == "JK" and d.weekday() == 3: continue 
                     
                     try:
-                        # On cherche le premier médecin dans la liste triée qui respecte les règles
                         c = next(m for m in ml if m not in jp.values() and check(m, d, p, pl, vo))
                         jp[p], stt[c] = c, stt[c] + VALS[p]
-                    except StopIteration: 
-                        ok = False; break
-                if not ok: break
-                pl[d] = jp
-            
-            if not ok: st.error("Impossible d'équilibrer avec ces contraintes OFF.")
-            else:
-                st.success("Planning global de 5 mois généré et équilibré !")
-                df_res = pd.DataFrame.from_dict(pl, orient='index')
-                df_res.index = [f"{fr_days[d.weekday()]} {d}" for d in df_res.index]
-                
-                # Style
-                def style_rows(row):
-                    d_s = row.name.split(' ')[1]
-                    d_o = date.fromisoformat(d_s)
-                    return ['background-color: #f0f2f6' if (d_o.weekday() >= 5 or d_o in BE_HOLIDAYS) else '' for _ in row]
-
-                st.dataframe(df_res.style.apply(style_rows, axis=1), height=600)
-                
-                # Recap Equité
-                res = []
-                total_periode_h = sum(stt.values())
-                for m,h in stt.items():
-                    cible_5m = int(160 * 5 * MEDS[m]["etp"]) # 160h/mois x 5 mois x ETP
-                    res.append({"Nom":m, "Heures Cumulées":h, "Cible Théorique (5m)":cible_5m, "Delta": h - cible_5m})
-                
-                st.subheader("⚖️ Bilan d'équité sur 5 mois")
-                st.table(pd.DataFrame(res))
-
-                buffer = io.BytesIO()
-                with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
-                    df_res.to_excel(writer, sheet_name='Planning_Global')
-                st.download_button("📥 Télécharger Planning Global (Excel)", buffer, "Planning_Global_2026.xlsx")
-
-    elif sel == "🔐 Code":
-        np = st.text_input("Nouveau code", type="password")
-        if st.button("Valider"):
-            u = gd(DB_F); u.loc[u["Medecin"]==st.session_state.user, "MDP"] = np
-            sd(u, DB_F); st.success("OK")
-
-    if sel == "Sortie":
-        if 'user' in st.session_state: del st.session_state.user
-        st.rerun()
+                        # Mise à jour des compteurs qualitatifs
+                        if is
