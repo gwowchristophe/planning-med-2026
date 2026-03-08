@@ -1,4 +1,3 @@
-import st as st # Erreur corrigée : import streamlit as st
 import streamlit as st
 import pandas as pd
 import os
@@ -57,15 +56,11 @@ def generate_ics(user_name, planning):
 
 # --- MOTEUR DE VALIDATION DES RÈGLES ---
 def est_valide(nom, date_obj, poste, planning, v_off):
-    # Règle 1: Desiderata (OFF)
     if date_obj.strftime("%Y-%m-%d") in v_off.get(nom, []): return False
-    # Règle 2: Repos Post-Garde (24h)
     veille = date_obj - timedelta(days=1)
     if veille in planning and nom in planning[veille].values(): return False
-    # Règle 3: Spécificités Daryush (4/10e, pas de Lundi, JM uniquement)
     if nom == "Daryush Valadi":
         if date_obj.weekday() == 0 or poste != "JM": return False
-    # Règle 4: Trio Warquignies (GW uniquement)
     if MEDS[nom]["trio"] and poste != "GW": return False
     return True
 
@@ -88,8 +83,26 @@ else:
     # --- ESPACE CONNECTÉ ---
     st.sidebar.title(f"Dr {st.session_state.user}")
     
-    # Restriction d'accès au générateur : Seul Christophe Angelo
+    # Restriction d'accès : Seul Christophe Angelo voit le Générateur
     ADMIN_USER = "Christophe Angelo"
     options_menu = ["📅 Mes OFF", "🔐 Sécurité", "Déconnexion"]
     
-    if st.session_state.user ==
+    if st.session_state.user == ADMIN_USER:
+        options_menu.insert(1, "🚀 Générateur")
+        
+    mode = st.sidebar.radio("Menu", options_menu)
+
+    # --- MODE : MES OFF ---
+    if mode == "📅 Mes OFF":
+        st.header("Gestion de vos indisponibilités")
+        annee = 2026
+        m_sel = st.selectbox("Choisir le mois :", [4, 5, 6, 7, 8], format_func=lambda x: calendar.month_name[x])
+        
+        all_off = get_data(OFF_FILE)
+        curr_off = set(all_off[all_off["Medecin"] == st.session_state.user]["Date_OFF"].astype(str).tolist())
+        
+        cal = calendar.monthcalendar(annee, m_sel)
+        cols_h = st.columns(7)
+        for i, jn in enumerate(["Lun", "Mar", "Mer", "Jeu", "Ven", "Sam", "Dim"]): cols_h[i].write(f"**{jn}**")
+        
+        for sem in cal:
