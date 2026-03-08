@@ -39,7 +39,8 @@ def generate_ics(name, planning):
     for d, p in planning.items():
         for pc, pn in p.items():
             if pn == name:
-                ics += ["BEGIN:VEVENT", f"SUMMARY:Poste {pc}", f"DTSTART;VALUE=DATE:{d.strftime('%Y%m%d')}", "END:VEVENT"]
+                dt = d.strftime('%Y%m%d')
+                ics += ["BEGIN:VEVENT", f"SUMMARY:Poste {pc}", f"DTSTART;VALUE=DATE:{dt}", "END:VEVENT"]
     ics.append("END:VCALENDAR")
     return "\n".join(ics)
 
@@ -60,20 +61,23 @@ if 'user' not in st.session_state:
     user_sel = st.selectbox("Nom", list(MEDS.keys()))
     pwd_in = st.text_input("Code", type="password")
     if st.button("Connexion"):
-        if not u_df.empty and pwd_in == u_df.loc[u_df["Medecin"]==user_sel, "MDP"].values[0]:
+        valid_pwd = u_df.loc[u_df["Medecin"]==user_sel, "MDP"].values[0]
+        if pwd_in == valid_pwd:
             st.session_state.user = user_sel
             st.rerun()
         else: st.error("Erreur code.")
 else:
     st.sidebar.title(f"Dr {st.session_state.user}")
     menu = ["📅 OFF", "🔐 Sécurité", "Sortie"]
-    if st.session_state.user == "Christophe Angelo": menu.insert(1, "🚀 Générateur")
+    if st.session_state.user == "Christophe Angelo": 
+        menu.insert(1, "🚀 Générateur")
     mode = st.sidebar.radio("Menu", menu)
+
+    nom_mois = {4:"Avril", 5:"Mai", 6:"Juin", 7:"Juillet", 8:"Août"}
 
     if mode == "📅 OFF":
         st.header("Gestion de vos indisponibilités")
-        # Sélecteur de mois avec noms écrits
-        m_sel = st.selectbox("Choisir le mois :", [4, 5, 6, 7, 8], format_func=lambda x: calendar.month_name[x])
+        m_sel = st.selectbox("Mois :", [4, 5, 6, 7, 8], format_func=lambda x: nom_mois[x])
         all_off = get_data(OFF_FILE)
         curr_off = set(all_off[all_off["Medecin"]==st.session_state.user]["Date_OFF"].astype(str).tolist())
         cal = calendar.monthcalendar(2026, m_sel)
@@ -82,13 +86,50 @@ else:
             for i, j in enumerate(sem):
                 if j != 0:
                     ds = f"2026-{m_sel:02d}-{j:02d}"
-                    label = f"{j} {'❌' if ds in curr_off else '✅'}"
-                    if cols[i].button(label, key=ds):
-                        if ds in curr_off: all_off = all_off[~((all_off["Medecin"]==st.session_state.user)&(all_off["Date_OFF"]==ds))]
-                        else: all_off = pd.concat([all_off, pd.DataFrame([{"Medecin":st.session_state.user, "Date_OFF":ds}])])
-                        save_data(all_off, OFF_FILE); st.rerun()
+                    txt = f"{j} {'❌' if ds in curr_off else '✅'}"
+                    if cols[i].button(txt, key=ds):
+                        if ds in curr_off: 
+                            all_off = all_off[~((all_off["Medecin"]==st.session_state.user)&(all_off["Date_OFF"]==ds))]
+                        else: 
+                            new_row = pd.DataFrame([{"Medecin":st.session_state.user, "Date_OFF":ds}])
+                            all_off = pd.concat([all_off, new_row])
+                        save_data(all_off, OFF_FILE)
+                        st.rerun()
 
     elif mode == "🚀 Générateur":
-        st.header("Moteur de génération d'horaire")
-        # REMPLACEMENT DU SLIDER PAR SELECTBOX ICI
-        mois_gen = st.selectbox("Mois à générer :", [4, 5, 6, 7, 8], format_func=lambda x:
+        st.header("Moteur de génération")
+        mois_gen = st.selectbox("Mois à générer :", [4, 5, 6, 7, 8], format_func=lambda x: nom_mois[x])
+        
+        if st.button("Lancer"):
+            v_off = get_data(OFF_FILE).groupby("Medecin")["Date_OFF"].apply(list).to_dict()
+            plan, stats = {}, {m: 0 for m in MEDS.keys()}
+            nb_jours = calendar.monthrange(2026, mois_gen)[1]
+            dates = [date(2026, mois_gen, d) for d in range(1, nb_jours+1)]
+            ok = True
+            for d in dates:
+                jp, ml = {}, list(MEDS.keys())
+                random.shuffle(ml)
+                for p in ["GW", "GM", "JK", "JM"]:
+                    if (p=="JK" and d.weekday() in [3,5,6]) or (p=="JM" and d.weekday() in [5,6]): continue
+                    try:
+                        c = next(m for m in ml if m not in jp.values() and est_valide(m, d, p, plan, v_off))
+                        jp[p], stats[c] = c, stats[c] + VALEURS[p]
+                    except StopIteration: 
+                        ok = False
+                        break
+                if not ok: break
+                plan[d] = jp
+            
+            if not ok: 
+                st.error("❌ IMPOSSIBLE : Trop de contraintes ce mois-ci.")
+            else:
+                st.success(f"✅ Planning de {nom_mois[mois_gen]} généré")
+                st.dataframe(pd.DataFrame.from_dict(plan, orient='index'), use_container_width=True)
+                res = []
+                for m,h in stats.items():
+                    res.append({"Nom":m, "Heures":h, "Cible":int(160*MEDS[m]["etp"])})
+                st.table(pd.DataFrame(res))
+                st.download_button("📥 ICS", generate_ics(st.session_state.user, plan), "mon_planning.ics")
+
+    elif mode == "🔐 Sécurité":
+        new_p = st.text_input("Nouveau code", type
