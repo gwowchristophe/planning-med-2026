@@ -4,7 +4,7 @@ import os, calendar, random, io
 from datetime import date, datetime, timedelta
 import holidays
 
-st.set_page_config(page_title="Planning 2026", layout="wide")
+st.set_page_config(page_title="Planning Expert 2026", layout="wide")
 VALS = {"GW": 24, "GM": 24, "JK": 9, "JM": 7}
 DB_F, OFF_F = "users_db.csv", "desiderata_db.csv"
 BE_HOLIDAYS = holidays.BE(years=2026)
@@ -28,11 +28,6 @@ MEDS = {
 def gd(f): return pd.read_csv(f) if os.path.exists(f) else pd.DataFrame()
 def sd(df, f): df.to_csv(f, index=False)
 
-if not os.path.exists(DB_F):
-    pd.DataFrame({"Medecin": list(MEDS.keys()), "MDP": ["Doudoudragon"]*13}).to_csv(DB_F, index=False)
-if not os.path.exists(OFF_F):
-    pd.DataFrame(columns=["Medecin", "Date_OFF"]).to_csv(OFF_F, index=False)
-
 def check(n, d, p, pl, vo):
     if d.strftime("%Y-%m-%d") in vo.get(n, []): return False
     v = d - timedelta(days=1)
@@ -44,8 +39,11 @@ def check(n, d, p, pl, vo):
     return True
 
 if 'user' not in st.session_state:
-    st.title("🏥 Accès 2026")
+    st.title("🏥 Accès Planning 2026")
     u_df = gd(DB_F)
+    if not os.path.exists(DB_F):
+        pd.DataFrame({"Medecin": list(MEDS.keys()), "MDP": ["Doudoudragon"]*13}).to_csv(DB_F, index=False)
+        st.rerun()
     u_sel = st.selectbox("Nom", list(MEDS.keys()))
     pw = st.text_input("Code", type="password")
     if st.button("OK"):
@@ -54,16 +52,15 @@ if 'user' not in st.session_state:
             st.rerun()
 else:
     st.sidebar.title(st.session_state.user)
-    m = ["📅 OFF"]
-    if st.session_state.user == "Christophe Angelo": m.append("🚀 Générateur")
-    m.extend(["🔐 Code", "Sortie"])
+    m = ["📅 Mes OFF", "🚀 Générateur Global", "🔐 Code", "Sortie"]
+    if st.session_state.user != "Christophe Angelo": m.remove("🚀 Générateur Global")
     sel = st.sidebar.radio("Menu", m)
     
     nms = {4:"Avril", 5:"Mai", 6:"Juin", 7:"Juillet", 8:"Août"}
     fr_days = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"]
 
-    if sel == "📅 OFF":
-        mo = st.selectbox("Mois", [4,5,6,7,8], format_func=lambda x: nms[x])
+    if sel == "📅 Mes OFF":
+        mo = st.selectbox("Mois pour encoder", [4,5,6,7,8], format_func=lambda x: nms[x])
         df = gd(OFF_F)
         co = set(df[df["Medecin"]==st.session_state.user]["Date_OFF"].tolist())
         cl = calendar.monthcalendar(2026, mo)
@@ -78,58 +75,73 @@ else:
                         else: df = pd.concat([df, pd.DataFrame([{"Medecin":st.session_state.user, "Date_OFF":ds}])])
                         sd(df, OFF_F); st.rerun()
 
-    elif sel == "🚀 Générateur":
-        mg = st.selectbox("Mois", [4,5,6,7,8], format_func=lambda x: nms[x])
-        if st.button("Générer"):
+    elif sel == "🚀 Générateur Global":
+        st.header("Génération Equilibrée (Avril - Août 2026)")
+        if st.button("Lancer la simulation complète"):
             vo = gd(OFF_F).groupby("Medecin")["Date_OFF"].apply(list).to_dict()
             pl, stt = {}, {m: 0 for m in MEDS.keys()}
-            ds = [date(2026, mg, d) for d in range(1, calendar.monthrange(2026, mg)[1]+1)]
+            
+            # Création de la liste de tous les jours du 01/04 au 31/08
+            ds = []
+            for m_idx in range(4, 9):
+                last_j = calendar.monthrange(2026, m_idx)[1]
+                for j_idx in range(1, last_j + 1):
+                    ds.append(date(2026, m_idx, j_idx))
+            
             ok = True
             for d in ds:
-                jp, ml = {}, list(MEDS.keys())
-                random.shuffle(ml)
-                is_off_day = (d.weekday() >= 5) or (d in BE_HOLIDAYS)
+                jp = {}
+                # Tri des médecins par ceux qui ont le MOINS d'heures par rapport à leur ETP (Priorité aux retardataires)
+                ml = sorted(list(MEDS.keys()), key=lambda x: stt[x] / MEDS[x]["etp"])
+                
                 for p in ["GW", "GM", "JK", "JM"]:
+                    is_off_day = (d.weekday() >= 5) or (d in BE_HOLIDAYS)
                     if is_off_day and p in ["JK", "JM"]: continue
                     if not is_off_day and p == "JK" and d.weekday() == 3: continue 
+                    
                     try:
+                        # On cherche le premier médecin dans la liste triée qui respecte les règles
                         c = next(m for m in ml if m not in jp.values() and check(m, d, p, pl, vo))
                         jp[p], stt[c] = c, stt[c] + VALS[p]
-                    except StopIteration: ok = False; break
+                    except StopIteration: 
+                        ok = False; break
                 if not ok: break
                 pl[d] = jp
             
-            if not ok: st.error("Impossible : Conflit de contraintes")
+            if not ok: st.error("Impossible d'équilibrer avec ces contraintes OFF.")
             else:
-                st.success(f"Planning de {nms[mg]} généré")
+                st.success("Planning global de 5 mois généré et équilibré !")
                 df_res = pd.DataFrame.from_dict(pl, orient='index')
                 df_res.index = [f"{fr_days[d.weekday()]} {d}" for d in df_res.index]
                 
+                # Style
                 def style_rows(row):
                     d_s = row.name.split(' ')[1]
                     d_o = date.fromisoformat(d_s)
-                    if d_o.weekday() >= 5 or d_o in BE_HOLIDAYS:
-                        return ['background-color: #f0f2f6'] * len(row)
-                    return [''] * len(row)
+                    return ['background-color: #f0f2f6' if (d_o.weekday() >= 5 or d_o in BE_HOLIDAYS) else '' for _ in row]
 
-                st.dataframe(df_res.style.apply(style_rows, axis=1), use_container_width=True)
+                st.dataframe(df_res.style.apply(style_rows, axis=1), height=600)
                 
-                # Export Excel
+                # Recap Equité
+                res = []
+                total_periode_h = sum(stt.values())
+                for m,h in stt.items():
+                    cible_5m = int(160 * 5 * MEDS[m]["etp"]) # 160h/mois x 5 mois x ETP
+                    res.append({"Nom":m, "Heures Cumulées":h, "Cible Théorique (5m)":cible_5m, "Delta": h - cible_5m})
+                
+                st.subheader("⚖️ Bilan d'équité sur 5 mois")
+                st.table(pd.DataFrame(res))
+
                 buffer = io.BytesIO()
                 with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
-                    df_res.to_excel(writer, sheet_name='Planning')
-                st.download_button(label="📥 Télécharger en Excel", data=buffer, file_name=f"Planning_{nms[mg]}.xlsx", mime="application/vnd.ms-excel")
-
-                res = [{"Nom":m, "Heures":h, "Cible":int(160*MEDS[m]["etp"])} for m,h in stt.items()]
-                st.subheader("⚖️ Récapitulatif des heures")
-                st.table(pd.DataFrame(res))
+                    df_res.to_excel(writer, sheet_name='Planning_Global')
+                st.download_button("📥 Télécharger Planning Global (Excel)", buffer, "Planning_Global_2026.xlsx")
 
     elif sel == "🔐 Code":
         np = st.text_input("Nouveau code", type="password")
         if st.button("Valider"):
-            u = gd(DB_F)
-            u.loc[u["Medecin"]==st.session_state.user, "MDP"] = np
-            sd(u, DB_F); st.success("Mis à jour")
+            u = gd(DB_F); u.loc[u["Medecin"]==st.session_state.user, "MDP"] = np
+            sd(u, DB_F); st.success("OK")
 
     if sel == "Sortie":
         if 'user' in st.session_state: del st.session_state.user
