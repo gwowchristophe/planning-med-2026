@@ -44,18 +44,12 @@ def generate_ics(name, planning):
     return "\n".join(ics)
 
 def est_valide(nom, d, p, plan, v_off):
-    # 1. Congés (OFF)
     if d.strftime("%Y-%m-%d") in v_off.get(nom, []): return False
-    # 2. Repos Post-Garde (24h)
     veille = d - timedelta(days=1)
     if veille in plan and nom in plan[veille].values(): return False
-    # 3. Contrainte Daryush (Pas Lundi, Uniquement JM)
     if nom == "Daryush Valadi" and (d.weekday() == 0 or p != "JM"): return False
-    # 4. Contrainte Trio Warquignies (Uniquement GW)
     if MEDS[nom]["trio"] and p != "GW": return False
-    # 5. Contrainte PF Laterre (Pas de Kennedy JK)
     if nom == "PF Laterre" and p == "JK": return False
-    # 6. Kennedy réservé aux éligibles
     if p == "JK" and not MEDS[nom]["jk"]: return False
     return True
 
@@ -77,7 +71,9 @@ else:
     mode = st.sidebar.radio("Menu", menu)
 
     if mode == "📅 OFF":
-        m_sel = st.selectbox("Mois", [4, 5, 6, 7, 8])
+        st.header("Gestion de vos indisponibilités")
+        # Sélecteur de mois avec noms écrits
+        m_sel = st.selectbox("Choisir le mois :", [4, 5, 6, 7, 8], format_func=lambda x: calendar.month_name[x])
         all_off = get_data(OFF_FILE)
         curr_off = set(all_off[all_off["Medecin"]==st.session_state.user]["Date_OFF"].astype(str).tolist())
         cal = calendar.monthcalendar(2026, m_sel)
@@ -93,38 +89,6 @@ else:
                         save_data(all_off, OFF_FILE); st.rerun()
 
     elif mode == "🚀 Générateur":
-        mois_gen = st.slider("Mois", 4, 8)
-        if st.button("Lancer"):
-            v_off = get_data(OFF_FILE).groupby("Medecin")["Date_OFF"].apply(list).to_dict()
-            plan, stats = {}, {m: 0 for m in MEDS.keys()}
-            dates = [date(2026, mois_gen, d) for d in range(1, calendar.monthrange(2026, mois_gen)[1]+1)]
-            ok = True
-            for d in dates:
-                jp, ml = {}, list(MEDS.keys()); random.shuffle(ml)
-                # Ordre d'assignation : GW, GM, JK, JM
-                for p in ["GW", "GM", "JK", "JM"]:
-                    if (p=="JK" and d.weekday() in [3,5,6]) or (p=="JM" and d.weekday() in [5,6]): continue
-                    try:
-                        c = next(m for m in ml if m not in jp.values() and est_valide(m, d, p, plan, v_off))
-                        jp[p], stats[c] = c, stats[c] + VALEURS[p]
-                    except StopIteration: ok = False; break
-                if not ok: break
-                plan[d] = jp
-            if not ok: st.error("❌ IMPOSSIBLE : Conflit de contraintes")
-            else:
-                st.success("✅ Planning généré")
-                st.dataframe(pd.DataFrame.from_dict(plan, orient='index'))
-                # Équité au prorata (Base 160h/mois pour un temps plein)
-                st.table(pd.DataFrame([{"Nom":m, "Heures":h, "Cible":int(160*MEDS[m]["etp"])} for m,h in stats.items()]))
-                st.download_button("📥 ICS", generate_ics(st.session_state.user, plan), "mon_planning.ics")
-
-    elif mode == "🔐 Sécurité":
-        new_p = st.text_input("Nouveau code", type="password")
-        if st.button("OK"):
-            u_df = get_data(DB_FILE)
-            u_df.loc[u_df["Medecin"]==st.session_state.user, "MDP"] = new_p
-            save_data(u_df, DB_FILE); st.success("Mis à jour.")
-
-    if mode == "Sortie": 
-        del st.session_state.user
-        st.rerun()
+        st.header("Moteur de génération d'horaire")
+        # REMPLACEMENT DU SLIDER PAR SELECTBOX ICI
+        mois_gen = st.selectbox("Mois à générer :", [4, 5, 6, 7, 8], format_func=lambda x:
