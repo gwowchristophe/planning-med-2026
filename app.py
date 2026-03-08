@@ -90,29 +90,52 @@ else:
                         else: ws.append_row([st.session_state.u, d_s])
                         st.rerun()
     elif choix == "📊 Planning Global":
-        st.header("Planning Complet (Avril - Août 2026)")
+        st.header("Planning Mensuel par Poste")
         df_p = read_sheet("Planning")
         
         if not df_p.empty:
-            # Sélecteur de mois pour ne pas avoir un tableau trop long
-            mois_selectionne = st.selectbox("Filtrer par mois", [4,5,6,7,8], format_func=lambda x: calendar.month_name[x])
+            # 1. Filtre par mois
+            mois_selectionne = st.selectbox("Mois", [4,5,6,7,8], format_func=lambda x: calendar.month_name[x])
             
-            # Conversion de la colonne Date en format date pour filtrer
+            # 2. Préparation des données
             df_p['Date_DT'] = pd.to_datetime(df_p['Date'])
             df_view = df_p[df_p['Date_DT'].dt.month == mois_selectionne].copy()
             
-            # Nettoyage pour l'affichage
-            df_view = df_view[["Date", "Poste", "Medecin"]]
-            
-            # Mise en forme visuelle (Couleurs par poste)
-            def color_cells(val):
-                if val == "GW": return 'background-color: #ff4b4b; color: white' # Rouge pour Garde WE
-                if val == "GM": return 'background-color: #1c83e1; color: white' # Bleu pour Garde Mons
-                if val == "JK (Kennedy)": return 'background-color: #7752fe; color: white' # Violet pour Kennedy
-                if val == "JM": return 'background-color: #24d1a5; color: black' # Vert pour Jour Mons
-                return ''
+            if not df_view.empty:
+                # Création du pivot : Lignes=Date, Colonnes=Poste, Valeurs=Medecin
+                # On utilise 'first' au cas où il y aurait des doublons par erreur
+                df_pivot = df_view.pivot_table(
+                    index='Date', 
+                    columns='Poste', 
+                    values='Medecin', 
+                    aggfunc='first'
+                ).reset_index()
 
-            st.dataframe(df_view.style.applymap(color_cells, subset=['Poste']), use_container_width=True, height=600)
+                # S'assurer que toutes les colonnes demandées existent, même si vides
+                for col in ["JM", "GM", "GW", "JK (Kennedy)"]:
+                    if col not in df_pivot.columns:
+                        df_pivot[col] = ""
+
+                # Réorganiser les colonnes dans l'ordre demandé
+                colonnes_ordre = ["Date", "JM", "GM", "GW", "JK (Kennedy)"]
+                df_pivot = df_pivot[colonnes_ordre]
+
+                # 3. Style et Affichage
+                def style_planning(row):
+                    date_obj = pd.to_datetime(row['Date'])
+                    feries = ["2026-04-06", "2026-05-01", "2026-05-14", "2026-05-25", "2026-07-21", "2026-08-15"]
+                    # Colorer toute la ligne si c'est un WE ou Férié
+                    if date_obj.weekday() >= 5 or row['Date'] in feries:
+                        return ['background-color: #fff2f2'] * len(row)
+                    return [''] * len(row)
+
+                st.dataframe(
+                    df_pivot.style.apply(style_planning, axis=1),
+                    use_container_width=True,
+                    height=800
+                )
+            else:
+                st.info("Aucune donnée pour ce mois.")
         else:
             st.info("Le planning est vide. Allez dans l'onglet 'Admin' pour le générer.")
     elif choix == "🚀 Admin":
