@@ -4,14 +4,20 @@ import os
 from datetime import date, timedelta
 
 # --- CONFIGURATION ---
-st.set_page_config(page_title="Planning Dragon 2026", layout="centered")
+st.set_page_config(page_title="Planning Médical 2026", layout="centered")
 DB_FILE = "users_db.csv"
 OFF_FILE = "desiderata_db.csv"
 
+# Nouveaux noms professionnels
+LISTE_MEDECINS = [
+    "Alexandra Warnant", "Alfredo Vieira", "Camie Dupuis", "Christian Davin", 
+    "Christophe Angelo", "Daryush Valadi", "Elisa Mastrodiscasa", "Gauthier Nendumba", 
+    "Julie Henrie", "Martin Hachez", "PF Laterre", "Raouf Sheta", "Simon Van Migem"
+]
+
 # Initialisation des fichiers
 if not os.path.exists(DB_FILE):
-    meds = ["Alex", "Christophe", "Julie", "Camie", "Martin", "Simon", "Gauthier", "Alfredo", "Raouf", "Elisa", "Christian", "Daryush"]
-    pd.DataFrame({"Medecin": meds, "MDP": ["Doudoudragon"] * len(meds)}).to_csv(DB_FILE, index=False)
+    pd.DataFrame({"Medecin": LISTE_MEDECINS, "MDP": ["Doudoudragon"] * len(LISTE_MEDECINS)}).to_csv(DB_FILE, index=False)
 
 if not os.path.exists(OFF_FILE):
     pd.DataFrame(columns=["Medecin", "Date_OFF"]).to_csv(OFF_FILE, index=False)
@@ -23,7 +29,7 @@ def save_data(df, file): df.to_csv(file, index=False)
 if 'user' not in st.session_state:
     st.title("🏥 Planning Médical 2026")
     u_df = get_data(DB_FILE)
-    user_sel = st.selectbox("Qui êtes-vous ?", u_df["Medecin"].tolist())
+    user_sel = st.selectbox("Sélectionnez votre nom", u_df["Medecin"].tolist())
     pwd_in = st.text_input("Mot de passe", type="password")
     
     if st.button("Se connecter"):
@@ -36,7 +42,7 @@ if 'user' not in st.session_state:
 else:
     # --- INTERFACE ---
     st.sidebar.title(f"Dr {st.session_state.user}")
-    menu = st.sidebar.radio("Menu", ["📅 Mes Desiderata", "🔐 Changer MDP", "⚙️ Admin", "Logout"])
+    menu = st.sidebar.radio("Menu", ["📅 Mes Desiderata", "🔐 Changer MDP", "⚙️ Admin", "Déconnexion"])
 
     if menu == "📅 Mes Desiderata":
         st.header("Gestion de vos indisponibilités")
@@ -46,13 +52,12 @@ else:
         
         st.subheader("1. Sélectionner une date ou une période")
         selected_range = st.date_input(
-            "Utilisez le calendrier :",
+            "Utilisez le calendrier (cliquez 2x pour une période) :",
             value=None,
             min_value=date(2026, 4, 1),
             max_value=date(2026, 8, 31),
         )
 
-        # Transformation de la sélection en liste de dates
         dates_to_process = []
         if selected_range:
             if isinstance(selected_range, list) or isinstance(selected_range, tuple):
@@ -73,24 +78,22 @@ else:
                     new_rows = pd.DataFrame([{"Medecin": st.session_state.user, "Date_OFF": d} for d in dates_to_process if d not in current_user_off])
                     all_off = pd.concat([all_off, new_rows], ignore_index=True)
                     save_data(all_off, OFF_FILE)
-                    st.success(f"{len(new_rows)} jour(s) ajouté(s)")
+                    st.success(f"Ajouté")
                     st.rerun()
 
         with col2:
             if st.button("➖ RETIRER", use_container_width=True):
                 if dates_to_process:
-                    # On garde uniquement les dates qui NE sont PAS dans la sélection actuelle
                     all_off = all_off[~((all_off["Medecin"] == st.session_state.user) & (all_off["Date_OFF"].isin(dates_to_process)))]
                     save_data(all_off, OFF_FILE)
-                    st.warning("Sélection retirée")
+                    st.warning("Retiré")
                     st.rerun()
 
         st.divider()
         st.subheader("2. Votre récapitulatif")
         if current_user_off:
             current_user_off.sort()
-            st.info(f"Total : {len(current_user_off)} jours OFF enregistrés.")
-            # Affichage en colonnes pour plus de clarté
+            st.info(f"Total : {len(current_user_off)} jours OFF")
             st.write(", ".join(current_user_off))
             
             if st.button("🗑️ TOUT SUPPRIMER (RAZ)", type="secondary"):
@@ -100,19 +103,20 @@ else:
         else:
             st.write("Aucune date enregistrée.")
 
-    # ... (Le reste du code Admin/MDP reste identique)
     elif menu == "⚙️ Admin":
         st.header("Zone Administrateur")
         off_data = get_data(OFF_FILE)
         st.dataframe(off_data)
-        st.download_button("📥 Télécharger CSV", off_data.to_csv(index=False), "desiderata.csv")
+        st.download_button("📥 Télécharger les Desiderata (CSV)", off_data.to_csv(index=False), "desiderata_complet.csv")
+
     elif menu == "🔐 Changer MDP":
-        new_p = st.text_input("Nouveau MDP", type="password")
-        if st.button("Valider"):
+        new_p = st.text_input("Nouveau mot de passe", type="password")
+        if st.button("Valider le changement"):
             u_df = get_data(DB_FILE)
             u_df.loc[u_df["Medecin"] == st.session_state.user, "MDP"] = new_p
             save_data(u_df, DB_FILE)
-            st.success("MDP changé !")
-    if menu == "Logout":
+            st.success("Mot de passe mis à jour !")
+
+    if menu == "Déconnexion":
         del st.session_state.user
         st.rerun()
