@@ -89,7 +89,32 @@ else:
                                     break
                         else: ws.append_row([st.session_state.u, d_s])
                         st.rerun()
+    elif choix == "📊 Planning Global":
+        st.header("Planning Complet (Avril - Août 2026)")
+        df_p = read_sheet("Planning")
+        
+        if not df_p.empty:
+            # Sélecteur de mois pour ne pas avoir un tableau trop long
+            mois_selectionne = st.selectbox("Filtrer par mois", [4,5,6,7,8], format_func=lambda x: calendar.month_name[x])
+            
+            # Conversion de la colonne Date en format date pour filtrer
+            df_p['Date_DT'] = pd.to_datetime(df_p['Date'])
+            df_view = df_p[df_p['Date_DT'].dt.month == mois_selectionne].copy()
+            
+            # Nettoyage pour l'affichage
+            df_view = df_view[["Date", "Poste", "Medecin"]]
+            
+            # Mise en forme visuelle (Couleurs par poste)
+            def color_cells(val):
+                if val == "GW": return 'background-color: #ff4b4b; color: white' # Rouge pour Garde WE
+                if val == "GM": return 'background-color: #1c83e1; color: white' # Bleu pour Garde Mons
+                if val == "JK (Kennedy)": return 'background-color: #7752fe; color: white' # Violet pour Kennedy
+                if val == "JM": return 'background-color: #24d1a5; color: black' # Vert pour Jour Mons
+                return ''
 
+            st.dataframe(df_view.style.applymap(color_cells, subset=['Poste']), use_container_width=True, height=600)
+        else:
+            st.info("Le planning est vide. Allez dans l'onglet 'Admin' pour le générer.")
     elif choix == "🚀 Admin":
         st.header("Console Administrateur")
         t1, t2 = st.tabs(["📊 Bilan d'Équité", "⚙️ Générateur 5 Mois"])
