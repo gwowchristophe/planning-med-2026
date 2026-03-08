@@ -206,67 +206,52 @@ else:
                             d_str = date_c.strftime("%Y-%m-%d")
                             is_rouge = (date_c.weekday() >= 5 or d_str in feries)
                             
-                            # --- A. KENNEDY (Attribution Bloc Semaine le Lundi) ---
+                            # --- 3. BOUCLE TEMPORELLE ---
+                    for mois in range(4, 9):
+                        jours = calendar.monthrange(2026, mois)[1]
+                        for j in range(1, jours + 1):
+                            date_c = datetime(2026, mois, j)
+                            d_str = date_c.strftime("%Y-%m-%d")
+                            is_rouge = (date_c.weekday() >= 5 or d_str in feries)
+                            
+                            # --- A. DARYUSH VALADI (PRIORITÉ JM) ---
+                            nom_dv = "Daryush Valadi"
+                            is_sem_A = (date_c.isocalendar()[1] % 2 == 0)
+                            # Sem A: Mar, Mer, Jeu (1, 2, 3) | Sem B: Mer, Jeu, Ven (2, 3, 4)
+                            jours_dv = [1, 2, 3] if is_sem_A else [2, 3, 4]
+                            
+                            if date_c.weekday() in jours_dv and not is_rouge:
+                                if f"{nom_dv}_{d_str}" not in absences:
+                                    planning_final.append([d_str, "JM", nom_dv, 8])
+                                    heures_reelles[nom_dv] += 8
+
+                            # --- B. KENNEDY (BLOC SEMAINE - 6 SEMAINES DE REPOS) ---
                             if date_c.weekday() == 0:
-                                jours_theo = [0, 1, 2, 4] # Lun, Mar, Mer, Ven
+                                jours_theo = [0, 1, 2, 4]
                                 dates_reelles_jk = [(date_c + timedelta(days=d)).strftime("%Y-%m-%d") for d in jours_theo if (date_c + timedelta(days=d)).strftime("%Y-%m-%d") not in feries]
                                 
-                                # 1. On récupère les autorisés JK (nettoyage des espaces pour éviter les bugs)
                                 c_jk = [m for m in meds if str(regles.get(m['Medecin'], {}).get('Autorise_Kennedy', '')).strip().upper() == 'OUI']
                                 
-                                # 2. On vérifie les absences (OFF)
-                                # On rajoute la condition check_fatigue pour s'assurer qu'il n'a pas fait de garde la veille (dimanche)
-                                dispos = [
-                                    m for m in c_jk if 
-                                    all(f"{m['Medecin']}_{d}" not in absences for d in dates_reelles_jk) and
-                                    check_fatigue(m['Medecin'], date_c)
-                                ]
+                                # Dispo si pas d'OFF et pas de garde la veille
+                                dispos = [m for m in c_jk if all(f"{m['Medecin']}_{d}" not in absences for d in dates_reelles_jk) and check_fatigue(m['Medecin'], date_c)]
                                 
                                 if dispos:
-                                    # 3. FILTRE STRICT : Au moins 6 semaines (42 jours) d'écart
-                                    # On regarde dans le planning déjà généré si le médecin a fait JK récemment
+                                    # Filtre strict des 6 semaines
                                     date_limite = date_c - timedelta(weeks=6)
+                                    dispos_frais = [m for m in dispos if not any(p[1] == "JK" and p[2] == m['Medecin'] and datetime.strptime(p[0], "%Y-%m-%d") > date_limite for p in planning_final)]
                                     
-                                    dispos_frais = []
-                                    for m in dispos:
-                                        deja_fait_recemment = any(
-                                            p[1] == "JK" and 
-                                            p[2] == m['Medecin'] and 
-                                            datetime.strptime(p[0], "%Y-%m-%d") > date_limite 
-                                            for p in planning_final
-                                        )
-                                        if not deja_fait_recemment:
-                                            dispos_frais.append(m)
-
-                                    # 4. Sélection
                                     if dispos_frais:
                                         elu = select_best_candidate(dispos_frais)
                                         for d_jk in dates_reelles_jk:
                                             planning_final.append([d_jk, "JK", elu['Medecin'], 8])
                                             heures_reelles[elu['Medecin']] += 8
                                     else:
-                                        # Si personne n'a respecté les 6 semaines de repos, on met une alerte
                                         for d_jk in dates_reelles_jk:
-                                            planning_final.append([d_jk, "JK", "⚠️ REPOS 6 SEM. IMPOSSIBLE", 0])
-                                else:
-                                    # Si personne n'est dispo (OFF)
-                                    for d_jk in dates_reelles_jk:
-                                        planning_final.append([d_jk, "JK", "⚠️ VIDE (OFF)", 0])
+                                            planning_final.append([d_jk, "JK", "⚠️ REPOS 6 SEM.", 0])
 
-                            # --- B. DARYUSH VALADI (JM FIXE) ---
-                            nom_dv = "Daryush Valadi"
-                            is_sem_A = (date_c.isocalendar()[1] % 2 == 0)
-                            jours_dv = [1, 2, 3] if is_sem_A else [2, 3, 4]
-                            
-                            if date_c.weekday() in jours_dv and not is_rouge:
-                                # Priorité à JK : si JK occupe déjà la journée, Daryush ne se met pas en JM
-                                if f"{nom_dv}_{d_str}" not in absences and not any(p[0]==d_str and p[1]=="JK" for p in planning_final):
-                                    planning_final.append([d_str, "JM", nom_dv, 8])
-                                    heures_reelles[nom_dv] += 8
-
-                            # --- C. JM (COMPLÉMENT) ---
-                            if not is_rouge and not any(p[0]==d_str and p[1] in ["JK", "JM"] for p in planning_final):
-                                c_jm = [m for m in meds if m['Medecin'] != nom_dv and regles.get(m['Medecin'], {}).get('Autorise_Kennedy') == 'OUI' and not any(p[0] == d_str and p[2] == m['Medecin'] for p in planning_final) and f"{m['Medecin']}_{d_str}" not in absences and check_fatigue(m['Medecin'], date_c)]
+                            # --- C. JM COMPLÉMENTAIRE (SI PAS DARYUSH NI JK) ---
+                            if not is_rouge and not any(p[0] == d_str and p[1] in ["JK", "JM"] for p in planning_final):
+                                c_jm = [m for m in meds if m['Medecin'] != nom_dv and regles.get(m['Medecin'], {}).get('Autorise_Kennedy') == 'OUI' and f"{m['Medecin']}_{d_str}" not in absences and check_fatigue(m['Medecin'], date_c)]
                                 if c_jm:
                                     elu = select_best_candidate(c_jm)
                                     planning_final.append([d_str, "JM", elu['Medecin'], 8])
