@@ -180,33 +180,26 @@ else:
 
                     df_u['ETP'] = df_u['ETP'].apply(lambda x: float(str(x).replace(',','.')) if x else 1.0)
                     meds = df_u.to_dict('records')
-                    regles = df_r.set_index('Medecin').to_dict('index')
-                    absences = set(df_d['Medecin'] + "_" + df_d['Date_OFF']) if not df_d.empty else set()
+                    # On nettoie les noms des clés du dictionnaire pour éviter les erreurs d'espaces
+                    regles = {k.strip(): v for k, v in df_r.set_index('Medecin').to_dict('index').items()}
+                    absences = set(df_d['Medecin'].str.strip() + "_" + df_d['Date_OFF']) if not df_d.empty else set()
                     feries = ["2026-04-06", "2026-05-01", "2026-05-14", "2026-05-25", "2026-07-21", "2026-08-15"]
                     
-                    planning_final, jk_hist = [], []
-                    heures_reelles = {m['Medecin']: 0.0 for m in meds}
-                    rouges_reels = {m['Medecin']: 0 for m in meds}
+                    planning_final = []
+                    heures_reelles = {m['Medecin'].strip(): 0.0 for m in meds}
+                    rouges_reels = {m['Medecin'].strip(): 0 for m in meds}
 
-                    # 2. LOGIQUE D'ÉQUITÉ ET SÉCURITÉ
                     def select_best_candidate(candidats):
-                        return min(candidats, key=lambda m: (heures_reelles[m['Medecin']]/m['ETP']) + (rouges_reels[m['Medecin']]/m['ETP']))
+                        if not candidats: return None
+                        # On compare les ratios d'heures pour l'équité
+                        return min(candidats, key=lambda m: (heures_reelles[m['Medecin'].strip()]/m['ETP']) + (rouges_reels[m['Medecin'].strip()]/m['ETP']))
 
                     def check_fatigue(nom, date_obj):
-                        # Pas de poste si garde la veille
                         hier = (date_obj - timedelta(days=1)).strftime("%Y-%m-%d")
-                        if any(p[0] == hier and p[2] == nom for p in planning_final): return False
+                        if any(p[0] == hier and p[2] == nom.strip() for p in planning_final): return False
                         return True
 
-                    # 3. BOUCLE TEMPORELLE
-                    for mois in range(4, 9):
-                        jours = calendar.monthrange(2026, mois)[1]
-                        for j in range(1, jours + 1):
-                            date_c = datetime(2026, mois, j)
-                            d_str = date_c.strftime("%Y-%m-%d")
-                            is_rouge = (date_c.weekday() >= 5 or d_str in feries)
-                            
-                            # --- 3. BOUCLE TEMPORELLE ---
+                    # 3. BOUCLE TEMPORELLE (Une seule fois !)
                     for mois in range(4, 9):
                         jours = calendar.monthrange(2026, mois)[1]
                         for j in range(1, jours + 1):
@@ -217,66 +210,70 @@ else:
                             # --- A. DARYUSH VALADI (PRIORITÉ JM) ---
                             nom_dv = "Daryush Valadi"
                             is_sem_A = (date_c.isocalendar()[1] % 2 == 0)
-                            # Sem A: Mar, Mer, Jeu (1, 2, 3) | Sem B: Mer, Jeu, Ven (2, 3, 4)
                             jours_dv = [1, 2, 3] if is_sem_A else [2, 3, 4]
                             
+                            daryush_present = False
                             if date_c.weekday() in jours_dv and not is_rouge:
                                 if f"{nom_dv}_{d_str}" not in absences:
                                     planning_final.append([d_str, "JM", nom_dv, 8])
                                     heures_reelles[nom_dv] += 8
+                                    daryush_present = True
 
-                            # --- B. KENNEDY (BLOC SEMAINE - 6 SEMAINES DE REPOS) ---
+                            # --- B. PF LATERRE (Remplaçant JM si Daryush absent) ---
+                            nom_pf = "PF Laterre"
+                            if not is_rouge and not daryush_present:
+                                if f"{nom_pf}_{d_str}" not in absences and check_fatigue(nom_pf, date_c):
+                                    planning_final.append([d_str, "JM", nom_pf, 8])
+                                    heures_reelles[nom_pf] += 8
+
+                            # --- C. KENNEDY (BLOC SEMAINE) ---
                             if date_c.weekday() == 0:
                                 jours_theo = [0, 1, 2, 4]
                                 dates_reelles_jk = [(date_c + timedelta(days=d)).strftime("%Y-%m-%d") for d in jours_theo if (date_c + timedelta(days=d)).strftime("%Y-%m-%d") not in feries]
-                                
-                                c_jk = [m for m in meds if str(regles.get(m['Medecin'], {}).get('Autorise_Kennedy', '')).strip().upper() == 'OUI']
-                                
-                                # Dispo si pas d'OFF et pas de garde la veille
-                                dispos = [m for m in c_jk if all(f"{m['Medecin']}_{d}" not in absences for d in dates_reelles_jk) and check_fatigue(m['Medecin'], date_c)]
-                                
+                                c_jk = [m for m in meds if str(regles.get(m['Medecin'].strip(), {}).get('Autorise_Kennedy', '')).strip().upper() == 'OUI']
+                                dispos = [m for m in c_jk if all(f"{m['Medecin'].strip()}_{d}" not in absences for d in dates_reelles_jk) and check_fatigue(m['Medecin'], date_c)]
                                 if dispos:
-                                    # Filtre strict des 6 semaines
                                     date_limite = date_c - timedelta(weeks=6)
-                                    dispos_frais = [m for m in dispos if not any(p[1] == "JK" and p[2] == m['Medecin'] and datetime.strptime(p[0], "%Y-%m-%d") > date_limite for p in planning_final)]
-                                    
-                                    if dispos_frais:
-                                        elu = select_best_candidate(dispos_frais)
+                                    dispos_frais = [m for m in dispos if not any(p[1] == "JK" and p[2] == m['Medecin'].strip() and datetime.strptime(p[0], "%Y-%m-%d") > date_limite for p in planning_final)]
+                                    elu = select_best_candidate(dispos_frais if dispos_frais else dispos)
+                                    if elu:
                                         for d_jk in dates_reelles_jk:
-                                            planning_final.append([d_jk, "JK", elu['Medecin'], 8])
-                                            heures_reelles[elu['Medecin']] += 8
-                                    else:
-                                        for d_jk in dates_reelles_jk:
-                                            planning_final.append([d_jk, "JK", "⚠️ REPOS 6 SEM.", 0])
-
-                            # --- C. JM COMPLÉMENTAIRE (SI PAS DARYUSH NI JK) ---
-                            if not is_rouge and not any(p[0] == d_str and p[1] in ["JK", "JM"] for p in planning_final):
-                                c_jm = [m for m in meds if m['Medecin'] != nom_dv and regles.get(m['Medecin'], {}).get('Autorise_Kennedy') == 'OUI' and f"{m['Medecin']}_{d_str}" not in absences and check_fatigue(m['Medecin'], date_c)]
-                                if c_jm:
-                                    elu = select_best_candidate(c_jm)
-                                    planning_final.append([d_str, "JM", elu['Medecin'], 8])
-                                    heures_reelles[elu['Medecin']] += 8
+                                            # On n'écrase pas le JM de Daryush ou PF
+                                            if not any(p[0] == d_jk and p[1] == "JM" for p in planning_final):
+                                                planning_final.append([d_jk, "JK", elu['Medecin'].strip(), 8])
+                                                heures_reelles[elu['Medecin'].strip()] += 8
 
                             # --- D. GARDES GM (7j/7) ---
+                            # Exclusion STRICTE (stripping des noms pour éviter les erreurs d'espaces)
                             exclus_gm = [nom_dv, "Christian Davin", "Elisa Mastrodicasa", "Raouf Sheta"]
-                            c_gm = [m for m in meds if m['Medecin'] not in exclus_gm]
-                            cands_gm = [m for m in c_gm if not any(p[0] == d_str and p[2] == m['Medecin'] for p in planning_final) and f"{m['Medecin']}_{d_str}" not in absences and check_fatigue(m['Medecin'], date_c)]
-                            if cands_gm:
-                                elu = select_best_candidate(cands_gm)
-                                planning_final.append([d_str, "GM", elu['Medecin'], 24])
-                                heures_reelles[elu['Medecin']] += 24
-                                if is_rouge: rouges_reels[elu['Medecin']] += 1
-                            else: planning_final.append([d_str, "GM", "⚠️ VIDE", 0])
+                            cands_gm = [
+                                m for m in meds if m['Medecin'].strip() not in exclus_gm and 
+                                f"{m['Medecin'].strip()}_{d_str}" not in absences and 
+                                check_fatigue(m['Medecin'].strip(), date_c) and
+                                not any(p[0] == d_str and p[2] == m['Medecin'].strip() for p in planning_final)
+                            ]
+                            elu_gm = select_best_candidate(cands_gm)
+                            if elu_gm:
+                                planning_final.append([d_str, "GM", elu_gm['Medecin'].strip(), 24])
+                                heures_reelles[elu_gm['Medecin'].strip()] += 24
+                                if is_rouge: rouges_reels[elu_gm['Medecin'].strip()] += 1
+                            else:
+                                planning_final.append([d_str, "GM", "⚠️ VIDE", 0])
 
                             # --- E. GARDES GW (7j/7) ---
-                            c_gw = [m for m in meds if m['Medecin'] != nom_dv]
-                            cands_gw = [m for m in c_gw if not any(p[0] == d_str and p[2] == m['Medecin'] for p in planning_final) and f"{m['Medecin']}_{d_str}" not in absences and check_fatigue(m['Medecin'], date_c)]
-                            if cands_gw:
-                                elu = select_best_candidate(cands_gw)
-                                planning_final.append([d_str, "GW", elu['Medecin'], 24])
-                                heures_reelles[elu['Medecin']] += 24
-                                if is_rouge: rouges_reels[elu['Medecin']] += 1
-                            else: planning_final.append([d_str, "GW", "⚠️ VIDE", 0])
+                            cands_gw = [
+                                m for m in meds if m['Medecin'].strip() != nom_dv and 
+                                f"{m['Medecin'].strip()}_{d_str}" not in absences and 
+                                check_fatigue(m['Medecin'].strip(), date_c) and
+                                not any(p[0] == d_str and p[2] == m['Medecin'].strip() for p in planning_final)
+                            ]
+                            elu_gw = select_best_candidate(cands_gw)
+                            if elu_gw:
+                                planning_final.append([d_str, "GW", elu_gw['Medecin'].strip(), 24])
+                                heures_reelles[elu_gw['Medecin'].strip()] += 24
+                                if is_rouge: rouges_reels[elu_gw['Medecin'].strip()] += 1
+                            else:
+                                planning_final.append([d_str, "GW", "⚠️ VIDE", 0])
 
                     # 4. ENVOI VERS GOOGLE SHEETS
                     df_res = pd.DataFrame(planning_final, columns=["Date", "Poste", "Medecin", "Heures"])
