@@ -9,7 +9,7 @@ st.set_page_config(page_title="Planning Médical 2026", layout="wide")
 V = {"GW": 24, "GM": 24, "JK": 9, "JM": 7}
 DB, OF = "users_db.csv", "desiderata_db.csv"
 BH = holidays.BE(years=2026)
-FR_D = ["Lun", "Mar", "Mer", "Jeu", "Ven", "Sam", "Dim"]
+FR_D = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"]
 
 MDS = {
     "Alexandra Warnant": {"e": 0.8, "j": 1, "t": 0},
@@ -27,7 +27,7 @@ MDS = {
     "Simon Van Migem": {"e": 0.8, "j": 1, "t": 0}
 }
 
-# --- FONCTIONS COEUR ---
+# --- FONCTIONS ---
 def gd(f): return pd.read_csv(f) if os.path.exists(f) else pd.DataFrame()
 def sd(df, f): df.to_csv(f, index=False)
 
@@ -44,11 +44,19 @@ def ok(n, d, p, pl, vo):
 
 def get_s(n, stt): return stt[n] / MDS[n]["e"]
 
-def color_we(row):
-    d = row.name
-    if d.weekday() >= 5 or d in BH:
-        return ['background-color: #f0f2f6'] * len(row)
-    return [''] * len(row)
+def create_ics(name, df_plan):
+    ics = ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//PlanningMed//FR"]
+    for d, row in df_plan.iterrows():
+        for poste, med in row.items():
+            if med == name:
+                d_str = d.strftime("%Y%m%d")
+                ics.append("BEGIN:VEVENT")
+                ics.append(f"DTSTART;VALUE=DATE:{d_str}")
+                ics.append(f"SUMMARY:Garde {poste}")
+                ics.append(f"DESCRIPTION:Poste de garde {poste} - Planning 2026")
+                ics.append("END:VEVENT")
+    ics.append("END:VCALENDAR")
+    return "\n".join(ics)
 
 # --- NAVIGATION ---
 if 'u' not in st.session_state:
@@ -66,18 +74,32 @@ if 'u' not in st.session_state:
             st.rerun()
         else: st.error("Code incorrect")
 else:
-    mn = ["📅 Mes OFF", "🚀 Générateur Global", "🔐 Mon Code", "Sortie"]
+    mn = ["📅 Mes OFF / Mon Agenda", "🚀 Générateur Global", "🔐 Mon Code", "Sortie"]
     if st.session_state.u != "Christophe Angelo": mn.remove("🚀 Générateur Global")
     sel = st.sidebar.radio("Navigation", mn)
 
-    if sel == "📅 Mes OFF":
-        st.header("Gestion des Indisponibilités")
+    if sel == "📅 Mes OFF / Mon Agenda":
+        st.header(f"Espace de {st.session_state.u}")
+        
+        # Section Téléchargement Agenda
+        if os.path.exists("last_plan.csv"):
+            st.subheader("📥 Mon Calendrier Personnel")
+            df_full = pd.read_csv("last_plan.csv", index_col=0)
+            df_full.index = pd.to_datetime(df_full.index)
+            ics_data = create_ics(st.session_state.u, df_full)
+            st.download_button(label="Télécharger mon fichier .ics (Agenda)", 
+                               data=ics_data, 
+                               file_name=f"agenda_{st.session_state.u}.ics", 
+                               mime="text/calendar")
+        
+        st.divider()
+        st.subheader("Encodage des indisponibilités")
         mo = st.selectbox("Choisir le mois", [4,5,6,7,8], format_func=lambda x: calendar.month_name[x])
-        df = gd(OF)
-        c_o = set(df[df["Medecin"]==st.session_state.u]["Date_OFF"].tolist())
+        df_off = gd(OF)
+        c_o = set(df_off[df_off["Medecin"]==st.session_state.u]["Date_OFF"].tolist())
         
         cols_h = st.columns(7)
-        for i, d_n in enumerate(FR_D): cols_h[i].write(f"**{d_n}**")
+        for i, d_n in enumerate(FR_D): cols_h[i].info(f"**{d_n}**")
         
         cl = calendar.monthcalendar(2026, mo)
         for s in cl:
@@ -87,70 +109,13 @@ else:
                     ds = f"2026-{mo:02d}-{j:02d}"
                     t = f"{j}\n{'❌' if ds in c_o else '✅'}"
                     if cols[i].button(t, key=ds, use_container_width=True):
-                        if ds in c_o: df = df[~((df["Medecin"]==st.session_state.u)&(df["Date_OFF"]==ds))]
-                        else: df = pd.concat([df, pd.DataFrame([{"Medecin":st.session_state.u,"Date_OFF":ds}])])
-                        sd(df, OF); st.rerun()
+                        if ds in c_o: df_off = df_off[~((df_off["Medecin"]==st.session_state.u)&(df_off["Date_OFF"]==ds))]
+                        else: df_off = pd.concat([df_off, pd.DataFrame([{"Medecin":st.session_state.u,"Date_OFF":ds}])])
+                        sd(df_off, OF); st.rerun()
 
     elif sel == "🚀 Générateur Global":
-        st.header("Génération 5 mois (Avril-Août)")
-        if st.button("Lancer la simulation équilibrée"):
+        st.header("Génération du Planning")
+        if st.button("Lancer la simulation"):
             vo = gd(OF).groupby("Medecin")["Date_OFF"].apply(list).to_dict()
             pl, stt = {}, {m: 0 for m in MDS.keys()}
-            sq = {m: {"S":0,"D":0,"F":0,"TotG":0} for m in MDS.keys()}
-            ads = [date(2026, m, d) for m in range(4, 9) for d in range(1, calendar.monthrange(2026, m)[1]+1)]
-            
-            res_ok = True
-            for d in ads:
-                jp = {}
-                ml = sorted(list(MDS.keys()), key=lambda x: get_s(x, stt))
-                f, s, di = (d in BH), (d.weekday()==5), (d.weekday()==6)
-                for p in ["GW", "GM", "JK", "JM"]:
-                    if (f or s or di) and p in ["JK", "JM"]: continue
-                    if not (f or s or di) and p == "JK" and d.weekday() == 3: continue
-                    try:
-                        c = next(m for m in ml if m not in jp.values() and ok(m,d,p,pl,vo))
-                        jp[p] = c
-                        stt[c] += V[p]
-                        sq[c]["TotG"] += 1
-                        if s: sq[c]["S"] += 1
-                        if di: sq[c]["D"] += 1
-                        if f: sq[c]["F"] += 1
-                    except StopIteration: res_ok = False; break
-                if not res_ok: break
-                pl[d] = jp
-            
-            if not res_ok: st.error("Impossible : Conflit de contraintes")
-            else:
-                st.success("Planning généré avec succès !")
-                df_p = pd.DataFrame.from_dict(pl, orient='index')
-                st.dataframe(df_p.style.apply(color_we, axis=1), height=500)
-                
-                res = []
-                for m in MDS.keys():
-                    etp = MDS[m]["e"]
-                    # Calcul : (Heures de garde / 22 semaines) + (7.68h vacances temps plein * ETP)
-                    moy_garde = stt[m] / 22
-                    bonus_vac = 7.68 * etp
-                    moy_totale = round(moy_garde + bonus_vac, 2)
-                    
-                    penible = sq[m]["S"] + sq[m]["D"] + sq[m]["F"]
-                    res.append({
-                        "Médecin": m, 
-                        "Heures": stt[m], 
-                        "Moy Totale/Sem": moy_totale,
-                        "Total Gardes": sq[m]["TotG"], 
-                        "Gardes WE/Fé": penible,
-                        "Sa": sq[m]["S"], "Di": sq[m]["D"], "Fé": sq[m]["F"]
-                    })
-                st.subheader("Bilan d'équité détaillé (Incluant congés proratisés)")
-                st.table(pd.DataFrame(res))
-
-    elif sel == "🔐 Mon Code":
-        np = st.text_input("Nouveau code", type="password")
-        if st.button("Enregistrer"):
-            u_df = gd(DB); u_df.loc[u_df["Medecin"]==st.session_state.u, "MDP"] = np
-            sd(u_df, DB); st.success("Code mis à jour")
-
-    elif sel == "Sortie":
-        if 'u' in st.session_state: del st.session_state.u
-        st.rerun()
+            sq = {m: {"S":0,"D":0,"F":0,"TotG":0} for m in MDS
