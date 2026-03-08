@@ -170,7 +170,8 @@ else:
                     df_u['ETP'] = df_u['ETP'].apply(lambda x: float(str(x).replace(',','.')) if x else 1.0)
                     meds = df_u.to_dict('records')
                     absences = set(df_d['Medecin'] + "_" + df_d['Date_OFF']) if not df_d.empty else set()
-                    
+                    # Liste des jours fériés 2026 pour bloquer le Kennedy
+                    feries = ["2026-04-06", "2026-05-01", "2026-05-14", "2026-05-25", "2026-07-21", "2026-08-15"]
                     # Transformation des règles en dictionnaire pour accès rapide
                     regles = df_r.set_index('Medecin').to_dict('index')
                     
@@ -185,46 +186,66 @@ else:
                             is_we = date_c.weekday() >= 5
                             
                             # --- A. KENNEDY (Lun, Mar, Mer, Ven) ---
+                            # --- A. KENNEDY (Uniquement si pas férié sur les 4j) ---
                             if date_c.weekday() == 0:
                                 j_jk = [0, 1, 2, 4]
-                                c_jk = [m for m in meds if regles.get(m['Medecin'], {}).get('Autorise_Kennedy') == 'OUI']
-                                dispos_jk = [m for m in c_jk if all(f"{m['Medecin']}_{(date_c + timedelta(days=d)).strftime('%Y-%m-%d')}" not in absences for d in j_jk)]
+                                # On vérifie si un des jours du bloc est férié
+                                bloc_ferie = any((date_c + timedelta(days=d)).strftime("%Y-%m-%d") in feries for d in j_jk)
                                 
+                                if not bloc_ferie:
+                                    c_jk = [m for m in meds if regles.get(m['Medecin'], {}).get('Autorise_Kennedy') == 'OUI']
+                                    dispos_jk = [m for m in c_jk if all(f"{m['Medecin']}_{(date_c + timedelta(days=d)).strftime('%Y-%m-%d')}" not in absences for d in j_jk)]
+                                    
+                                    if dispos_jk:
+                                        elu_jk = min(dispos_jk, key=lambda x: dettes[x['Medecin']])
+                                        for d in j_jk:
+                                            d_str_jk = (date_c + timedelta(days=d)).strftime("%Y-%m-%d")
+                                            planning_final.append([d_str_jk, "JK (Kennedy)", elu_jk['Medecin'], 8])
+                                            dettes[elu_jk['Medecin']] += (8 / elu_jk['ETP'])                                
                                 if dispos_jk:
                                     elu_jk = min(dispos_jk, key=lambda x: dettes[x['Medecin']])
                                     for d in j_jk:
                                         planning_final.append([(date_c + timedelta(days=d)).strftime("%Y-%m-%d"), "JK (Kennedy)", elu_jk['Medecin'], 8])
                                         dettes[elu_jk['Medecin']] += (8 / elu_jk['ETP'])
 
-                            # --- B. GARDE (24h) ---
-                            poste, h_p = ("GW", 24) if is_we else ("GM", 24)
-                            cands = []
+                            # --- B. POSTE JOUR (JM) - Semaine hors férié ---
+                            if not is_we and d_str not in feries:
+                                # On cherche les médecins dispos (pas de JK aujourd'hui, pas de OFF)
+                                c_jm = [m for m in meds if not any(p[0] == d_str and p[2] == m['Medecin'] for p in planning_final)]
+                                c_jm = [m for m in c_jm if f"{m['Medecin']}_{d_str}" not in absences]
+                                
+                                if c_jm:
+                                    elu_jm = min(c_jm, key=lambda x: dettes[x['Medecin']])
+                                    planning_final.append([d_str, "JM", elu_jm['Medecin'], 8])
+                                    dettes[elu_jm['Medecin']] += (8 / elu_jm.get('ETP', 1.0))
+
+                            # --- C. GARDE (GM ou GW) - TOUJOURS QUELQU'UN ---
+                            # Si c'est un WE ou un jour Férié, le poste s'appelle GW, sinon GM
+                            p_type, h_p = ("GW", 24) if (is_we or d_str in feries) else ("GM", 24)
+                            cands_g = []
                             for m in meds:
                                 nom = m['Medecin']
                                 r = regles.get(nom, {})
                                 
-                                # Filtres dynamiques selon Google Sheets
-                                if is_we and r.get('Autorise_Garde_WE') != 'OUI': continue
-                                if not is_we and r.get('Autorise_Garde_Semaine') != 'OUI': continue
+                                # Vérification des droits selon l'onglet Regles
+                                if (is_we or d_str in feries) and r.get('Autorise_Garde_WE') != 'OUI': continue
+                                if (not is_we and d_str not in feries) and r.get('Autorise_Garde_Semaine') != 'OUI': continue
                                 
-                                # Sécurités automatiques (Kennedy, OFF, Repos J+1, 8 jours)
-                                if any(p[0] == d_str and p[2] == nom and "JK" in p[1] for p in planning_final): continue
+                                # Sécurités : Pas déjà en poste (JK ou JM), pas de OFF, Repos J+1
+                                if any(p[0] == d_str and p[2] == nom for p in planning_final): continue
                                 if f"{nom}_{d_str}" in absences: continue
                                 
                                 h_hier = (date_c - timedelta(days=1)).strftime("%Y-%m-%d")
                                 if any(p[0] == h_hier and p[2] == nom and "G" in p[1] for p in planning_final): continue
                                 
-                                h_8d = (date_c - timedelta(days=8)).strftime("%Y-%m-%d")
-                                if len([p for p in planning_final if p[2] == nom and "G" in p[1] and p[0] > h_8d]) >= 2: continue
-                                
-                                cands.append(m)
+                                cands_g.append(m)
 
-                            if cands:
-                                elu = min(cands, key=lambda x: dettes[x['Medecin']])
-                                dettes[elu['Medecin']] += (h_p / elu['ETP'])
-                                planning_final.append([d_str, poste, elu['Medecin'], h_p])
+                            if cands_g:
+                                elu_g = min(cands_g, key=lambda x: dettes[x['Medecin']])
+                                planning_final.append([d_str, p_type, elu_g['Medecin'], h_p])
+                                dettes[elu_g['Medecin']] += (h_p / elu_g.get('ETP', 1.0))
                             else:
-                                planning_final.append([d_str, poste, "⚠️ VIDE", 0])
+                                planning_final.append([d_str, p_type, "⚠️ VIDE", 0])
 
                     # --- 3. PUBLICATION FINALE ---
                     df_res = pd.DataFrame(planning_final, columns=["Date", "Poste", "Medecin", "Heures"])
