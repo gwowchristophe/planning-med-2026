@@ -1,5 +1,4 @@
 import streamlit as st
-from streamlit_gsheets import GSheetsConnection
 import pandas as pd
 import calendar
 from datetime import date, timedelta
@@ -8,90 +7,89 @@ import holidays
 # --- CONFIGURATION ---
 st.set_page_config(page_title="Planning Médical 2026", layout="wide")
 V = {"GW": 24, "GM": 24, "JK": 9, "JM": 7}
-URL_SHEET = "https://docs.google.com/spreadsheets/d/1tk032kmegtMoTwhbOzopRns-NW4gVeyeuAe7CUmvbUE/export?format=csv" # À REMPLACER
+SHEET_ID = "1tk032kmegtMoTwhbOzopRns-NW4gVeyeuAe7CUmvbUE"
 
-# Connexion à Google Sheets
-conn = st.connection("gsheets", type=GSheetsConnection)
-
-# --- FONCTIONS DE LECTURE/ÉCRITURE ---
+# --- FONCTION DE LECTURE UNIVERSELLE ---
 def load_data(sheet_name):
-    # Cette méthode transforme l'URL pour lire chaque onglet directement en CSV
-    csv_url = f"https://docs.google.com/spreadsheets/d/1tk032kmegtMoTwhbOzopRns-NW4gVeyeuAe7CUmvbUE/gviz/tq?tqx=out:csv&sheet={sheet_name}"
-    return pd.read_csv(csv_url)
+    url = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/gviz/tq?tqx=out:csv&sheet={sheet_name}"
+    return pd.read_csv(url)
 
-def save_data(df, sheet_name):
-    conn.update(spreadsheet=URL_SHEET, worksheet=sheet_name, data=df)
-    st.cache_data.clear()
+# --- LISTE DES MÉDECINS ---
+MDS_LIST = [
+    "Alexandra Warnant", "Alfredo Vieira", "Camie Dupuis", "Christian Davin",
+    "Christophe Angelo", "Daryush Valadi", "Elisa Mastrodiscasa", "Gauthier Nendumba",
+    "Julie Henrie", "Martin Hachez", "PF Laterre", "Raouf Sheta", "Simon Van Migem"
+]
 
 # --- INTERFACE ---
 if 'u' not in st.session_state:
-    st.title("🏥 Planning Mons/Warquignies 2026")
-    u_s = st.selectbox("Médecin", [
-        "Alexandra Warnant", "Alfredo Vieira", "Camie Dupuis", "Christian Davin",
-        "Christophe Angelo", "Daryush Valadi", "Elisa Mastrodiscasa", "Gauthier Nendumba",
-        "Julie Henrie", "Martin Hachez", "PF Laterre", "Raouf Sheta", "Simon Van Migem"
-    ])
+    st.title("🏥 Planning Mons/Warquignies")
+    u_s = st.selectbox("Sélectionnez votre nom", MDS_LIST)
     pw = st.text_input("Mot de passe", type="password")
     
     if st.button("Se connecter"):
-        df_users = load_data("Users")
-        user_row = df_users[df_users["Medecin"] == u_s]
-        if not user_row.empty and pw == str(user_row.iloc[0]["MDP"]):
+        df_u = load_data("Users")
+        # On vérifie le mot de passe dans le Google Sheet
+        user_data = df_u[df_u["Medecin"] == u_s]
+        if not user_data.empty and str(user_data.iloc[0]["MDP"]) == pw:
             st.session_state.u = u_s
             st.rerun()
-        else: st.error("Identifiants incorrects")
+        else:
+            st.error("Mot de passe incorrect ou utilisateur non trouvé dans l'onglet 'Users'")
 
 else:
-    # Récupération des notifications d'échanges
-    df_e = load_data("Echanges")
-    mes_notifs = df_e[(df_e["Destinataire"] == st.session_state.u) & (df_e["Statut"] == "ATTENTE")]
-    
-    menu = [
-        "📅 Désiderata de congé", 
-        f"🔄 Échanges ({len(mes_notifs)})", 
-        "🚀 Admin", 
-        "🔑 Changement de mot de passe", 
-        "Sortie"
-    ]
-    if st.session_state.u != "Christophe Angelo": menu.remove("🚀 Admin")
-    sel = st.sidebar.radio("Navigation", menu)
+    # Récupération des données pour les notifications
+    try:
+        df_e = load_data("Echanges")
+        mes_demandes = df_e[(df_e["Destinataire"] == st.session_state.u) & (df_e["Statut"] == "ATTENTE")]
+        nb_notif = len(mes_demandes)
+    except:
+        nb_notif = 0
 
-    # --- LOGIQUE DÉSIDERATA ---
+    label_echange = f"🔄 Échanges ({nb_notif})" if nb_notif > 0 else "🔄 Échanges"
+    mn = ["📅 Désiderata de congé", label_echange, "🚀 Admin", "🔑 Changement de mot de passe", "Sortie"]
+    if st.session_state.u != "Christophe Angelo": mn.remove("🚀 Admin")
+    sel = st.sidebar.radio("Navigation", mn)
+
+    # 1. DÉSIDERATA
     if sel == "📅 Désiderata de congé":
-        st.header("Encoder vos congés (✅ disponible / ❌ absent)")
-        mo = st.selectbox("Mois", [4,5,6,7,8], format_func=lambda x: calendar.month_name[x])
-        df_off = load_data("Desiderata")
-        
-        # Filtre les dates OFF du médecin actuel
-        mes_off = set(df_off[df_off["Medecin"] == st.session_state.u]["Date_OFF"].tolist())
-        
-        for s in calendar.monthcalendar(2026, mo):
-            cols = st.columns(7)
-            for i, j in enumerate(s):
-                if j != 0:
-                    ds = f"2026-{str(mo).zfill(2)}-{str(j).zfill(2)}"
-                    label = f"{j} ❌" if ds in mes_off else f"{j} ✅"
-                    if cols[i].button(label, key=ds):
-                        if ds in mes_off:
-                            df_off = df_off[~((df_off["Medecin"] == st.session_state.u) & (df_off["Date_OFF"] == ds))]
-                        else:
-                            new_row = pd.DataFrame([{"Medecin": st.session_state.u, "Date_OFF": ds}])
-                            df_off = pd.concat([df_off, new_row])
-                        save_data(df_off, "Desiderata")
-                        st.rerun()
+        st.header("Vos Désiderata")
+        st.info("Cliquez sur un jour pour basculer entre Présent ✅ et Absent ❌")
+        # (La logique de sauvegarde ici nécessite une configuration plus poussée pour écrire sur Google Sheets)
+        st.warning("Note : La lecture est active. L'écriture vers Google Sheets nécessite l'ID client dans vos Secrets.")
 
-    # --- CHANGEMENT MOT DE PASSE ---
+    # 2. ÉCHANGES
+    elif "🔄 Échanges" in sel:
+        st.header("Centre d'échanges")
+        st.write(f"Bonjour Dr. {st.session_state.u}")
+        
+        if nb_notif > 0:
+            st.subheader("📬 Demandes en attente de votre validation")
+            for idx, row in mes_demandes.iterrows():
+                with st.expander(f"Demande de {row['Emetteur']} pour le {row['Date']}"):
+                    st.write(f"Poste : **{row['Poste']}**")
+                    st.button("✅ Accepter (Indisponible en lecture seule)", disabled=True)
+        else:
+            st.info("Vous n'avez aucune demande d'échange en attente.")
+
+    # 3. ADMIN
+    elif sel == "🚀 Admin":
+        st.header("Espace Administrateur")
+        st.subheader("État actuel du personnel")
+        df_users = load_data("Users")
+        st.dataframe(df_users)
+        
+        if st.button("Simuler la génération du planning"):
+            st.write("Moteur de calcul prêt.")
+
+    # 4. CHANGEMENT DE MOT DE PASSE
     elif sel == "🔑 Changement de mot de passe":
-        st.header("Modifier votre accès")
+        st.header("Modifier votre mot de passe")
         new_p = st.text_input("Nouveau mot de passe", type="password")
-        conf = st.text_input("Confirmer", type="password")
-        if st.button("Valider"):
-            if new_p == conf and new_p != "":
-                df_u = load_data("Users")
-                df_u.loc[df_u["Medecin"] == st.session_state.u, "MDP"] = new_p
-                save_data(df_u, "Users")
-                st.success("Mot de passe mis à jour dans Google Sheets !")
+        if st.button("Enregistrer"):
+            st.info("Cette fonction nécessite les droits d'écriture sur le Google Sheet.")
 
+    # 5. SORTIE
     elif sel == "Sortie":
         del st.session_state.u
         st.rerun()
