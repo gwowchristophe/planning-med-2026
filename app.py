@@ -121,7 +121,7 @@ else:
                     })
                 st.table(pd.DataFrame(bilan).sort_values("Dette (H/ETP)"))
 
-       import streamlit as st
+import streamlit as st
 import pandas as pd
 import gspread
 from google.oauth2.service_account import Credentials
@@ -246,57 +246,69 @@ else:
 
         with t2:
             st.subheader("Générateur Global (Avril à Août 2026)")
-            st.info("L'algorithme va calculer les 5 mois d'un coup pour garantir une équité parfaite (Moyenne d'heures / ETP).")
+            st.info("L'algorithme calcule les 5 mois d'un coup pour garantir l'équité (Heures/ETP).")
             
-            # --- BOUTON DE GÉNÉRATION ---
             if st.button("🚀 Lancer la génération harmonisée sur 5 mois"):
                 with st.spinner("Équilibrage des dettes horaires en cours..."):
-                    # 1. PRÉPARATION
+                    # 1. PRÉPARATION DES DONNÉES
                     df_u = read_sheet("Users")
                     df_d = read_sheet("Desiderata")
-                    # On s'assure que l'ETP est un nombre
-                    df_u['ETP'] = df_u['ETP'].apply(lambda x: float(str(x).replace(',','.')) if x else 1.0)
-                    meds = df_u.to_dict('records')
-                    absences = set(df_d['Medecin'] + "_" + df_d['Date_OFF']) if not df_d.empty else set()
                     
-                    # Initialisation des dettes à 0 (car on génère tout à neuf)
-                    dettes = {m['Medecin']: 0.0 for m in meds}
-                    planning_global = []
-
-                    # 2. BOUCLE SUR LES 5 MOIS (Avril=4 à Août=8)
-                    for mois in range(4, 9):
-                        jours_dans_mois = calendar.monthrange(2026, mois)[1]
+                    if df_u.empty:
+                        st.error("L'onglet 'Users' est vide.")
+                    else:
+                        # Nettoyage ETP et préparation des profils
+                        df_u['ETP'] = df_u['ETP'].apply(lambda x: float(str(x).replace(',','.')) if x else 1.0)
+                        meds = df_u.to_dict('records')
+                        absences = set(df_d['Medecin'] + "_" + df_d['Date_OFF']) if not df_d.empty else set()
                         
-                        for j in range(1, jours_dans_mois + 1):
-                            date_c = datetime(2026, mois, j)
-                            d_str = date_c.strftime("%Y-%m-%d")
-                            is_we = date_c.weekday() >= 5
-                            
-                            # Définition du poste (Exemple : 1 garde de 24h par jour)
-                            poste_nom = "GW (Garde WE)" if is_we else "GM (Garde Semaine)"
-                            h_poste = 24
+                        # Initialisation
+                        dettes = {m['Medecin']: 0.0 for m in meds}
+                        planning_global = []
 
-                            # FILTRAGE SELON VOS 6 CRITÈRES
-                            candidats = []
-                            for m in meds:
-                                nom = m['Medecin']
-                                # Critère 1: Pas OFF
-                                if f"{nom}_{d_str}" in absences: continue
-                                # Critère 2: Repos J+1 (Vérifie le jour précédent dans le planning global)
-                                hier = (date_c - timedelta(days=1)).strftime("%Y-%m-%d")
-                                if any(p[0] == hier and p[2] == nom for p in planning_global): continue
-                                # Critère 3: Daryush (Pas de WE)
-                                if m.get('Is_Daryush') == 'OUI' and is_we: continue
-                                # Critère 4: Règle des 8 jours (Max 2 postes)
-                                h_8d = (date_c - timedelta(days=8)).strftime("%Y-%m-%d")
-                                nb_postes_8j = len([p for p in planning_global if p[2] == nom and p[0] > h_8d])
-                                if nb_postes_8j >= 2: continue
+                        # 2. BOUCLE SUR LES 5 MOIS (Avril à Août)
+                        for mois in range(4, 9):
+                            jours_mois = calendar.monthrange(2026, mois)[1]
+                            for j in range(1, jours_mois + 1):
+                                date_c = datetime(2026, mois, j)
+                                d_str = date_c.strftime("%Y-%m-%d")
+                                is_we = date_c.weekday() >= 5
                                 
-                                candidats.append(m)
+                                # Définition du poste (Ex: Garde 24h)
+                                poste_nom, h_p = ("GW", 24) if is_we else ("GM", 24)
 
-                            # ATTRIBUTION PAR ÉQUITÉ (Celui qui a la plus petite dette relative)
-                            if candidats:
-                                choisi = min(candidats, key=lambda x: dettes[x['Medecin']])
-                                nom_elu = choisi['Medecin']
-                                # Mise à jour de la dette : Heures divisées par l'ETP
-                                dettes[nom
+                                # FILTRAGE (REPOS J+1, DARYUSH, 8 JOURS)
+                                candidats = []
+                                for m in meds:
+                                    nom = m['Medecin']
+                                    # Règle 1: Pas OFF
+                                    if f"{nom}_{d_str}" in absences: continue
+                                    # Règle 2: Repos J+1
+                                    h_hier = (date_c - timedelta(days=1)).strftime("%Y-%m-%d")
+                                    if any(p[0] == h_hier and p[2] == nom for p in planning_global): continue
+                                    # Règle 3: Daryush (Pas de WE)
+                                    if m.get('Is_Daryush') == 'OUI' and is_we: continue
+                                    # Règle 4: Max 2 postes sur 8 jours glissants
+                                    h_8d = (date_c - timedelta(days=8)).strftime("%Y-%m-%d")
+                                    if len([p for p in planning_global if p[2] == nom and p[0] > h_8d]) >= 2: continue
+                                    
+                                    candidats.append(m)
+
+                                if candidats:
+                                    choisi = min(candidats, key=lambda x: dettes[x['Medecin']])
+                                    dettes[choisi['Medecin']] += (h_p / choisi['ETP'])
+                                    planning_global.append([d_str, poste_nom, choisi['Medecin'], h_p])
+                                else:
+                                    planning_global.append([d_str, poste_nom, "⚠️ VIDE", 0])
+
+                        # 3. AFFICHAGE ET EXPORT AUTOMATIQUE
+                        df_res = pd.DataFrame(planning_global, columns=["Date", "Poste", "Medecin", "Heures"])
+                        st.success("Planning généré et équilibré !")
+                        st.dataframe(df_res)
+                        
+                        # Publication immédiate
+                        ws_plan = get_gsheet().worksheet("Planning")
+                        ws_plan.clear()
+                        ws_plan.append_row(["Date", "Poste", "Medecin", "Heures"])
+                        ws_plan.append_rows(df_res.values.tolist())
+                        st.balloons()
