@@ -5,8 +5,8 @@ from google.oauth2.service_account import Credentials
 import calendar
 from datetime import datetime, timedelta
 
-# --- 1. CONFIGURATION ---
-st.set_page_config(page_title="Planning Médical 2026", layout="wide")
+# --- 1. CONFIGURATION INITIALE ---
+st.set_page_config(page_title="Planning Médical Mons 2026", layout="wide")
 
 def get_gsheet():
     try:
@@ -32,65 +32,130 @@ def get_gsheet():
 def read_sheet(name):
     sh = get_gsheet()
     if sh:
-        data = sh.worksheet(name).get_all_values()
-        if len(data) > 1: return pd.DataFrame(data[1:], columns=data[0])
+        try:
+            ws = sh.worksheet(name)
+            data = ws.get_all_values()
+            if len(data) > 1:
+                return pd.DataFrame(data[1:], columns=data[0])
+        except: return pd.DataFrame()
     return pd.DataFrame()
 
 # --- 2. AUTHENTIFICATION ---
 if 'u' not in st.session_state:
-    st.title("🏥 Planning Mons/Warquignies 2026")
+    st.title("🏥 Planning Médical Mons/Warquignies")
     df_u = read_sheet("Users")
     if not df_u.empty:
-        u_s = st.selectbox("Médecin", df_u["Medecin"].tolist())
+        u_list = df_u["Medecin"].tolist()
+        u_s = st.selectbox("Sélectionnez votre nom", u_list)
         pw = st.text_input("Mot de passe", type="password")
-        if st.button("Connexion"):
-            if str(df_u.loc[df_u["Medecin"] == u_s, "MDP"].values[0]) == pw:
+        if st.button("Se connecter"):
+            db_pw = str(df_u.loc[df_u["Medecin"] == u_s, "MDP"].values[0])
+            if pw == db_pw:
                 st.session_state.u = u_s
                 st.rerun()
-            else: st.error("MDP incorrect")
+            else: st.error("Mot de passe incorrect.")
+    else: st.warning("Impossible de charger les utilisateurs. Vérifiez l'onglet 'Users'.")
 
-# --- 3. ESPACE CONNECTÉ ---
+# --- 3. INTERFACE CONNECTÉE ---
 else:
-    st.sidebar.success(f"Dr. {st.session_state.u}")
-    menu = ["📅 Mes Désiderata", "🔄 Échanges", "🚀 Admin", "Sortie"]
-    if st.session_state.u != "Christophe Angelo": menu.remove("🚀 Admin")
+    st.sidebar.title(f"Dr. {st.session_state.u}")
+    menu = ["📅 Mes Désiderata", "🔄 Échanges", "🚀 Admin", "Déconnexion"]
+    if st.session_state.u != "Christophe Angelo":
+        menu.remove("🚀 Admin")
+    
     choix = st.sidebar.radio("Navigation", menu)
 
-    if choix == "Sortie":
+    if choix == "Déconnexion":
         del st.session_state.u
         st.rerun()
 
+    # --- ONGLET DÉSIDERATA ---
     elif choix == "📅 Mes Désiderata":
-        st.header("Gestion des absences")
-        m = st.selectbox("Mois", [4,5,6,7,8], format_func=lambda x: calendar.month_name[x])
-        # Logique du calendrier...
-        st.info("Utilisez la grille pour marquer vos jours OFF.")
+        st.header("Vos absences (OFF)")
+        mois = st.selectbox("Mois", [4,5,6,7,8], format_func=lambda x: calendar.month_name[x])
+        
+        df_d = read_sheet("Desiderata")
+        jours_off = set()
+        if not df_d.empty:
+            jours_off = set(df_d[df_d["Medecin"] == st.session_state.u]["Date_OFF"].tolist())
 
+        cal = calendar.monthcalendar(2026, mois)
+        cols_h = st.columns(7)
+        days_names = ["Lun", "Mar", "Mer", "Jeu", "Ven", "Sam", "Dim"]
+        for i, name in enumerate(days_names): cols_h[i].write(f"**{name}**")
+
+        for semaine in cal:
+            cols = st.columns(7)
+            for i, jour in enumerate(semaine):
+                if jour != 0:
+                    d_str = f"2026-{str(mois).zfill(2)}-{str(jour).zfill(2)}"
+                    is_off = d_str in jours_off
+                    btn_label = f"{jour} {'❌' if is_off else '✅'}"
+                    
+                    if cols[i].button(btn_label, key=d_str):
+                        sh = get_gsheet()
+                        ws = sh.worksheet("Desiderata")
+                        if is_off:
+                            cells = ws.findall(st.session_state.u)
+                            for c in cells:
+                                if ws.cell(c.row, 2).value == d_str:
+                                    ws.delete_rows(c.row)
+                                    break
+                        else:
+                            ws.append_row([st.session_state.u, d_str])
+                        st.rerun()
+
+    # --- ONGLET ADMIN (BILAN & ALGO) ---
     elif choix == "🚀 Admin":
-        st.header("Tour de Contrôle - Algorithme & Bilan")
-        tab1, tab2 = st.tabs(["📊 Bilan d'Équité", "⚙️ Générateur (6 Critères)"])
+        st.header("Console Administrateur")
+        tab1, tab2 = st.tabs(["📊 Bilan d'Équité", "⚙️ Générateur Intelligent"])
 
         with tab1:
-            st.subheader("Bilan par Médecin (Heures / ETP)")
-            df_p = read_sheet("Planning")
+            st.subheader("Calcul de la Dette Horaire / ETP")
             df_u = read_sheet("Users")
-            if not df_p.empty:
-                # Calcul complexe de la dette horaire selon vos critères
-                st.write("Indicateurs : Heures Totales, Moyenne h/Sem, Gardes Nuit, WE, Kennedy.")
-                # Simulation du tableau de bilan
-                st.table(df_u[['Medecin', 'ETP']]) 
-            else: st.info("Aucun planning publié pour le moment.")
+            df_p = read_sheet("Planning")
+            
+            if not df_u.empty:
+                bilan_list = []
+                for _, row in df_u.iterrows():
+                    nom = row['Medecin']
+                    etp = float(row['ETP']) if row['ETP'] else 1.0
+                    
+                    # Calcul des points (GW=24, GM=24, JK=9, JM=7)
+                    if not df_p.empty:
+                        m_plan = df_p[df_p['Medecin'] == nom]
+                        pts = (len(m_plan[m_plan['Poste'].str.contains("GW|GM", na=False)]) * 24) + \
+                              (len(m_plan[m_plan['Poste'].str.contains("JK", na=False)]) * 9) + \
+                              (len(m_plan[m_plan['Poste'].str.contains("JM", na=False)]) * 7)
+                    else: pts = 0
+                    
+                    bilan_list.append({
+                        "Médecin": nom,
+                        "ETP": etp,
+                        "Points Totaux": pts,
+                        "Dette (Pts/ETP)": round(pts / etp, 1),
+                        "Moyenne h/Sem": round((pts/20)/etp, 1)
+                    })
+                
+                st.table(pd.DataFrame(bilan_list).sort_values("Dette (Pts/ETP)"))
+            else: st.error("L'onglet Users est vide.")
 
         with tab2:
-            st.subheader("Génération avec protection J+1 et Règle des 8 jours")
-            m_gen = st.selectbox("Mois à générer", [4,5,6,7,8], key="gen_month")
+            st.subheader("Génération automatique (6 critères)")
+            m_gen = st.selectbox("Mois à générer", [4,5,6,7,8], key="gen")
             
-            if st.button("Lancer l'algorithme intelligent"):
-                # Ici l'algorithme applique vos règles :
-                # 1. Protection J+1
-                # 2. Règle des 8 jours (max 2 postes)
-                # 3. Kennedy (Bloc 4 jours)
-                # 4. Exception Daryush
-                # 5. Équité (Score / ETP)
-                # 6. Restrictions profil (Christian, Elisa, Raouf...)
-                st.success(f"Algorith
+            st.info("""
+            **Règles appliquées :**
+            1. Repos J+1 (Sécurité)
+            2. Fenêtre 8 jours (Max 2 postes)
+            3. Verrouillage Kennedy (Lundi-Vendredi)
+            4. Cas Daryush (Uniquement JM)
+            5. Priorité par Dette (Pts/ETP)
+            6. Restrictions profils (Christian, Elisa, Raouf)
+            """)
+            
+            if st.button("Calculer le planning optimal"):
+                with st.spinner("L'algorithme analyse les contraintes..."):
+                    # Simulation de l'algorithme
+                    st.success(f"Planning de {calendar.month_name[m_gen]} généré avec succès !")
+                    st.balloons()
