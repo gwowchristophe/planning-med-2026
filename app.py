@@ -290,56 +290,56 @@ else:
         df_u = read_sheet("Users")
         
         if df_p.empty or df_u.empty:
-            st.warning("⚠️ Aucune donnée disponible. Générez d'abord le planning dans l'onglet Admin.")
+            st.warning("⚠️ Aucune donnée disponible. Générez d'abord le planning.")
         else:
-            # 1. Nettoyage et préparation
-            df_u['Medecin'] = df_u['Medecin'].str.strip()
-            df_p['Medecin'] = df_p['Medecin'].str.strip()
+            # 1. Nettoyage strict des colonnes de base
+            df_u['Medecin'] = df_u['Medecin'].astype(str).str.strip()
+            df_p['Medecin'] = df_p['Medecin'].astype(str).str.strip()
             
-            # Conversion ETP en numérique (remplace virgule par point)
-            df_u['ETP'] = pd.to_numeric(df_u['ETP'].astype(str).str.replace(',', '.'), errors='coerce').fillna(1.0)
-            # Sécurité : un ETP ne peut pas être 0
-            df_u['ETP'] = df_u['ETP'].apply(lambda x: x if x > 0 else 1.0)
+            # Conversion forcée de l'ETP (Gestion des virgules et erreurs)
+            df_u['ETP_Num'] = pd.to_numeric(df_u['ETP'].astype(str).str.replace(',', '.'), errors='coerce').fillna(1.0)
+            df_u.loc[df_u['ETP_Num'] <= 0, 'ETP_Num'] = 1.0 # Éviter division par zéro
 
-            # 2. Calcul des Heures
-            stats_h = df_p.groupby('Medecin')['Heures'].sum().reset_index()
+            # 2. Agrégation des Heures (On s'assure que Heures est numérique)
+            df_p['Heures_Num'] = pd.to_numeric(df_p['Heures'], errors='coerce').fillna(0)
+            stats_h = df_p.groupby('Medecin')['Heures_Num'].sum().reset_index()
+            stats_h.columns = ['Medecin', 'Total_Heures']
             
             # 3. Calcul des Jours Rouges
             feries = ["2026-04-06", "2026-05-01", "2026-05-14", "2026-05-25", "2026-07-21", "2026-08-15"]
-            df_p['is_rouge'] = df_p['Date'].apply(lambda d: pd.to_datetime(d).weekday() >= 5 or d in feries)
+            df_p['is_rouge'] = df_p['Date'].apply(lambda d: pd.to_datetime(d).weekday() >= 5 or str(d) in feries)
             stats_r = df_p[df_p['is_rouge']].groupby('Medecin')['Date'].nunique().reset_index()
             stats_r.columns = ['Medecin', 'Jours Rouges']
             
-            # 4. Fusion (Merge)
-            bilan = pd.merge(df_u[['Medecin', 'ETP']], stats_h, on='Medecin', how='left')
+            # 4. Fusion des données
+            bilan = pd.merge(df_u[['Medecin', 'ETP_Num']], stats_h, on='Medecin', how='left')
             bilan = pd.merge(bilan, stats_r, on='Medecin', how='left')
             
-            # Remplacer les NaN par 0 pour les calculs
-            bilan[['Heures', 'Jours Rouges']] = bilan[['Heures', 'Jours Rouges']].fillna(0)
+            # Remplacement final des NaN par 0 avant calcul
+            bilan['Total_Heures'] = bilan['Total_Heures'].fillna(0)
+            bilan['Jours Rouges'] = bilan['Jours Rouges'].fillna(0)
 
-            # 5. Calcul du Ratio (avec sécurité division par zéro)
-            # Formule : Heures réelles / (ETP * 160h par mois * 5 mois)
-            bilan['Charge Relative (%)'] = (bilan['Heures'] / (bilan['ETP'] * 800)) * 100
-            
+            # 5. Calcul de la Charge (Calcul sécurisé)
+            # On utilise .to_numpy() pour éviter les problèmes de types de Series
+            h = bilan['Total_Heures'].to_numpy(dtype=float)
+            e = bilan['ETP_Num'].to_numpy(dtype=float)
+            bilan['Charge Relative (%)'] = (h / (e * 800)) * 100
+
             # --- AFFICHAGE ---
             col1, col2, col3 = st.columns(3)
-            col1.metric("Moyenne Heures", f"{int(bilan['Heures'].mean())}h")
+            col1.metric("Moyenne", f"{int(bilan['Total_Heures'].mean())}h")
             col2.metric("Max Week-ends", f"{int(bilan['Jours Rouges'].max())}")
-            col3.metric("Effectif", f"{len(df_u)} médecins")
+            col3.metric("Effectif", f"{len(df_u)}")
 
-            st.subheader("Tableau Récapitulatif")
-            
-            # Style et formatage
             st.dataframe(
-                bilan.style.background_gradient(subset=['Heures'], cmap="OrRd")
+                bilan.style.background_gradient(subset=['Total_Heures'], cmap="OrRd")
                 .format({
-                    'ETP': '{:.2f}', 
-                    'Heures': '{:.0f}h', 
+                    'ETP_Num': '{:.2f}', 
+                    'Total_Heures': '{:.0f}h', 
                     'Jours Rouges': '{:.0f}', 
                     'Charge Relative (%)': '{:.1f}%'
                 }),
                 use_container_width=True
             )
 
-            st.subheader("Visualisation de la Charge Totale")
-            st.bar_chart(data=bilan, x="Medecin", y="Heures")
+            st.bar_chart(data=bilan, x="Medecin", y="Total_Heures")
