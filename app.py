@@ -286,46 +286,60 @@ else:
     elif choix == "⚖️ Bilan Équité":
         st.header("Analyse de l'Équité et de la Charge")
         
-        # Récupération des données
         df_p = read_sheet("Planning")
         df_u = read_sheet("Users")
         
         if df_p.empty or df_u.empty:
             st.warning("⚠️ Aucune donnée disponible. Générez d'abord le planning dans l'onglet Admin.")
         else:
-            # --- CALCULS ---
-            # 1. Total Heures par médecin
+            # 1. Nettoyage et préparation
+            df_u['Medecin'] = df_u['Medecin'].str.strip()
+            df_p['Medecin'] = df_p['Medecin'].str.strip()
+            
+            # Conversion ETP en numérique (remplace virgule par point)
+            df_u['ETP'] = pd.to_numeric(df_u['ETP'].astype(str).str.replace(',', '.'), errors='coerce').fillna(1.0)
+            # Sécurité : un ETP ne peut pas être 0
+            df_u['ETP'] = df_u['ETP'].apply(lambda x: x if x > 0 else 1.0)
+
+            # 2. Calcul des Heures
             stats_h = df_p.groupby('Medecin')['Heures'].sum().reset_index()
             
-            # 2. Total Jours Rouges (Week-ends + Fériés)
+            # 3. Calcul des Jours Rouges
             feries = ["2026-04-06", "2026-05-01", "2026-05-14", "2026-05-25", "2026-07-21", "2026-08-15"]
             df_p['is_rouge'] = df_p['Date'].apply(lambda d: pd.to_datetime(d).weekday() >= 5 or d in feries)
             stats_r = df_p[df_p['is_rouge']].groupby('Medecin')['Date'].nunique().reset_index()
             stats_r.columns = ['Medecin', 'Jours Rouges']
             
-            # 3. Fusion avec la liste des Users pour voir même ceux qui ont 0h
-            df_u['Medecin_Clean'] = df_u['Medecin'].str.strip()
-            bilan = pd.merge(df_u[['Medecin_Clean', 'ETP']], stats_h, left_on='Medecin_Clean', right_on='Medecin', how='left')
-            bilan = pd.merge(bilan, stats_r, on='Medecin', how='left').fillna(0)
+            # 4. Fusion (Merge)
+            bilan = pd.merge(df_u[['Medecin', 'ETP']], stats_h, on='Medecin', how='left')
+            bilan = pd.merge(bilan, stats_r, on='Medecin', how='left')
             
-            # Indicateur d'équité (Charge réelle vs Temps de travail contractuel)
-            # On estime environ 100 jours ouvrés sur la période
-            bilan['Ratio Équité'] = (bilan['Heures'] / (bilan['ETP'] * 8)) / 100 
-            bilan = bilan.drop(columns=['Medecin_Clean'])
+            # Remplacer les NaN par 0 pour les calculs
+            bilan[['Heures', 'Jours Rouges']] = bilan[['Heures', 'Jours Rouges']].fillna(0)
 
+            # 5. Calcul du Ratio (avec sécurité division par zéro)
+            # Formule : Heures réelles / (ETP * 160h par mois * 5 mois)
+            bilan['Charge Relative (%)'] = (bilan['Heures'] / (bilan['ETP'] * 800)) * 100
+            
             # --- AFFICHAGE ---
             col1, col2, col3 = st.columns(3)
             col1.metric("Moyenne Heures", f"{int(bilan['Heures'].mean())}h")
             col2.metric("Max Week-ends", f"{int(bilan['Jours Rouges'].max())}")
-            col3.metric("Effectif Total", f"{len(df_u)} médecins")
+            col3.metric("Effectif", f"{len(df_u)} médecins")
 
             st.subheader("Tableau Récapitulatif")
+            
+            # Style et formatage
             st.dataframe(
-                bilan.style.background_gradient(subset=['Heures'], cmap="YlOrRd")
-                .format({'ETP': '{:.2f}', 'Heures': '{:.0f}h', 'Ratio Équité': '{:.1%}'}),
+                bilan.style.background_gradient(subset=['Heures'], cmap="OrRd")
+                .format({
+                    'ETP': '{:.2f}', 
+                    'Heures': '{:.0f}h', 
+                    'Jours Rouges': '{:.0f}', 
+                    'Charge Relative (%)': '{:.1f}%'
+                }),
                 use_container_width=True
             )
 
-            st.subheader("Répartition Graphique des Heures")
+            st.subheader("Visualisation de la Charge Totale")
             st.bar_chart(data=bilan, x="Medecin", y="Heures")
-
