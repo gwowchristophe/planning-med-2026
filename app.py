@@ -331,9 +331,12 @@ else:
             col2.metric("Max Week-ends", f"{int(bilan['Jours Rouges'].max())}")
             col3.metric("Effectif", f"{len(df_u)}")
 
+            # --- AFFICHAGE DU TABLEAU ---
+            st.subheader("Tableau Récapitulatif")
+            
+            # On retire .background_gradient pour éviter l'erreur Matplotlib
             st.dataframe(
-                bilan.style.background_gradient(subset=['Total_Heures'], cmap="OrRd")
-                .format({
+                bilan.style.format({
                     'ETP_Num': '{:.2f}', 
                     'Total_Heures': '{:.0f}h', 
                     'Jours Rouges': '{:.0f}', 
@@ -341,5 +344,9 @@ else:
                 }),
                 use_container_width=True
             )
+
+            # Le graphique en barres fonctionnera car il utilise la bibliothèque native de Streamlit
+            st.subheader("Visualisation de la Charge Totale")
+            st.bar_chart(data=bilan, x="Medecin", y="Total_Heures")
 
             st.bar_chart(data=bilan, x="Medecin", y="Total_Heures")
